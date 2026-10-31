@@ -1,5 +1,3 @@
--- Catn Hub for Anime Battle Arena (place 1458767429). UI: BPUINEW.
-
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -8,9 +6,6 @@ local player = Players.LocalPlayer
 assert(player, "Run this script after Roblox has finished joining.")
 assert(type(loadstring) == "function", "Catn Hub needs loadstring.")
 
----------------------------------------------------------------------------------------------
--- Single instance: re-running the hub destroys the previous copy first.
----------------------------------------------------------------------------------------------
 local env = _G
 if type(getgenv) == "function" then
     local ok, value = pcall(getgenv)
@@ -24,10 +19,6 @@ end
 
 local BPUI = ...
 
-
----------------------------------------------------------------------------------------------
--- Executor capabilities
----------------------------------------------------------------------------------------------
 local executor = "Unknown executor"
 if type(identifyexecutor) == "function" then
     local ok, name, version = pcall(identifyexecutor)
@@ -46,9 +37,6 @@ end
 local correctGame = game.PlaceId == 1458767429
 local supported = click ~= nil and correctGame
 
----------------------------------------------------------------------------------------------
--- Lifecycle
----------------------------------------------------------------------------------------------
 local alive = true
 local connections = {}
 local cleanups = {}
@@ -91,12 +79,10 @@ local function isFocused()
     return windowFocused == true
 end
 
--- Native input only lands while Roblox is the active window and nothing is being typed.
 local function canInput() return isFocused() and UIS:GetFocusedTextBox() == nil end
 
 local function hideWindow() if window then pcall(function() window:Hide() end) end end
 
--- Folder under the executor's hidden GUI container, so other scripts can't see our UI.
 local function hiddenGuiParent()
     if type(gethui) == "function" then
         local ok, value = pcall(gethui)
@@ -105,8 +91,6 @@ local function hiddenGuiParent()
     return game:GetService("CoreGui")
 end
 
--- The game's own input actions (PlayerScripts.BaseContext: Block, Dodge, Move1-4, MouseClick,
--- UseMode...). Firing them works with Roblox in the background and never moves the real mouse.
 local function gameAction(name)
     local scripts = player:FindFirstChild("PlayerScripts")
     local context = scripts and scripts:FindFirstChild("BaseContext")
@@ -130,9 +114,6 @@ local function make(className, props, parent)
     return object
 end
 
----------------------------------------------------------------------------------------------
--- Frame timing and ping (used by the Divergent timing and the Overview)
----------------------------------------------------------------------------------------------
 local timing = {frame = 1 / 60, frameJitter = 0, ping = 0.02, pingJitter = 0}
 connect(RunService.Heartbeat, function(dt)
     if dt <= 0 or dt > 1 then return end
@@ -148,16 +129,6 @@ local function samplePing()
     return measured
 end
 
----------------------------------------------------------------------------------------------
--- Game data helpers. Everything here replicates to every client:
---   Player.Charge (Value / MaxValue)          mode bar
---   Player.Stats.Kills / Deaths / Damage      match stats
---   Player.Backpack.<Move> (Configuration)    one per move; attribute COOLDOWN rises to 20
---                                             while recharging, missing or 20 = ready;
---                                             .Config/SlotN gives the hotbar slot
---   Character.Blocking (BoolValue), Character.UsingSkill (StringValue)
--- Idle players sit on a team named ".AFK".
----------------------------------------------------------------------------------------------
 local Game = {}
 
 function Game.aliveRoot(model)
@@ -170,9 +141,6 @@ end
 
 function Game.ownRoot() return Game.aliveRoot(player.Character) end
 
--- whose a character in workspace.Live is: a player's own body, or a summon, clone or stand one of their
--- moves made. Summons usually carry the owner's name or an Owner / Creator value. nil means nobody's
--- (a dummy or an NPC)
 local OWNER_KEYS = {"Owner", "Creator", "Summoner", "Master", "Player"}
 function Game.ownerOf(model)
     local owner = Players:GetPlayerFromCharacter(model)
@@ -211,7 +179,6 @@ function Game.sameTeam(targetPlayer)
     return targetPlayer.Team == nil and targetPlayer.TeamColor == player.TeamColor
 end
 
--- mode: "enemies", "sameTeam" or "off"
 function Game.teamAllows(targetPlayer, mode)
     if mode == "off" then return true end
     local same = Game.sameTeam(targetPlayer)
@@ -240,8 +207,6 @@ function Game.isBlocking(character)
     return blocking ~= nil and blocking:IsA("BoolValue") and blocking.Value
 end
 
--- can't be hurt right now: frozen in an awakening or ultimate animation (the root is anchored and the
--- game adds "i" until it ends), spawn protection ("FORCEFIELD"), or marked untargetable ("NoTarg")
 function Game.untouchable(character)
     if not character then return false end
     local root = character:FindFirstChild("HumanoidRootPart")
@@ -280,7 +245,6 @@ local function moveProgress(move)
     return type(value) == "number" and math.clamp(value / 20, 0, 1) or 1
 end
 
--- Moves in hotbar order: {name, slot, progress, ready}
 function Game.moves(targetPlayer)
     local backpack = targetPlayer:FindFirstChildOfClass("Backpack")
     local list = {}
@@ -298,8 +262,6 @@ function Game.moves(targetPlayer)
     return list
 end
 
--- Our own move for hotbar slot `index`: SlotN folder first, then the HUD button's MoveName.
--- An unknown slot counts as ready so callers never stall.
 function Game.ownMoveReady(index)
     local backpack = player:FindFirstChildOfClass("Backpack")
     if not backpack then return true end
@@ -314,9 +276,6 @@ function Game.ownMoveReady(index)
     return not move or moveProgress(move) >= 1
 end
 
----------------------------------------------------------------------------------------------
--- Assist: Yuji (Black Flash on move 2, Divergent Fist variant, Skull Smash)
----------------------------------------------------------------------------------------------
 local yuji = {
     blackFlash = supported, blackFlashLast = "waiting for move 2", blackFlashClicks = 0,
     divergent = supported, divergentLast = "waiting for move 1", divergentClicks = 0,
@@ -324,7 +283,6 @@ local yuji = {
 }
 state.Yuji = yuji
 
--- Divergent timing: base delay plus half the round-trip ping, jitter and frame overhead.
 local function divergentDelay()
     local measured = samplePing()
     local frameOverhead = math.max(0, timing.frame - 1 / 60)
@@ -333,12 +291,8 @@ local function divergentDelay()
     return delay, measured
 end
 
--- a few random milliseconds before a timed click, so reaction times never line up exactly
--- (the game kicks for identical Kokushibo timings and has anti-macro checks on Nanami)
 local function humanDelay(maxMs) return math.random() * maxMs / 1000 end
 
--- hit chance per helper: below 100% it sometimes leaves a timing to you on purpose, so a run of
--- perfect hits doesn't give it away
 local hitChance = {blackFlash = 100, yuji = 100, nanami = 100, kokushibo = 100}
 state.HitChance = hitChance
 local function rollHit(key) return math.random() * 100 < (hitChance[key] or 100) end
@@ -380,7 +334,6 @@ local function bindYuji(character)
         end)
     end)
 
-    -- Black Flash: UsingSkill "Black Flash" arms it, the "Action" child is the strike cue.
     local blackFlashArmed, blackFlashToken, skullToken = false, 0, 0
     hook(character.ChildAdded, function(child)
         if child.Name == "UsingSkill" and child:IsA("StringValue") then
@@ -428,18 +381,10 @@ onCleanup(function()
     table.clear(characterConnections)
 end)
 
----------------------------------------------------------------------------------------------
--- Assist: Nanami Ratio hit (move 1, and the second 7:3 Combo)
--- While our character has NANAMIAIM the server invokes NanamiCheck, which parents
--- NanamiCutGUI to the TARGET's root and slides MainBar.Cutter toward X = 0.7. A click counts
--- within 0.02 of that mark; an earlier click fails. Bars that appear while we are not aiming
--- belong to other Nanamis and are ignored.
----------------------------------------------------------------------------------------------
 local nanami = {enabled = supported, last = "waiting", hits = 0}
 state.Nanami = nanami
 do
-    -- the game counts within 0.02 of the mark and has anti-macro checks on Nanami, so each bar gets
-    -- its own random click distance and the reaction time never repeats
+
     local TARGET = 0.7
     local current, clicked = nil, setmetatable({}, {__mode = "k"})
     local windows = setmetatable({}, {__mode = "k"})
@@ -472,12 +417,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Assist: Black Flash for any character (ReplicatedStorage.BlackFlashCheck)
--- The camera FOV tweens down to 6 over the lead-in and a click during that dive locks the
--- attempt out. When the dive ends the window opens and the FOV tweens back to 70, so we click
--- on the first frame the FOV climbs again after a deep dive.
----------------------------------------------------------------------------------------------
 local anyBlackFlash = {enabled = supported, last = "waiting", clicks = 0}
 state.AnyBlackFlash = anyBlackFlash
 do
@@ -519,14 +458,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Assist: Kokushibo timed right click (ReplicatedStorage.KokushiboCheck)
--- The server invokes the check with two numbers: a lead-in of (a1 - a2) * 2 seconds, then a
--- window of a2 * 2 seconds where a right click (the Move5 input action) counts. Pressing during
--- the lead-in fails it. The game also records reaction times and kicks you when several match,
--- so the press lands at a fresh random point in the middle of the window every time.
--- The game's handler is wrapped only to read the two numbers; it still runs unchanged.
----------------------------------------------------------------------------------------------
 local kokushibo = {enabled = false, available = false, last = "waiting", hits = 0}
 state.Kokushibo = kokushibo
 do
@@ -571,10 +502,6 @@ do
     end
 end
 
----------------------------------------------------------------------------------------------
--- Assist: Yusuke gun sweep. After Spirit Gun / Demon Gun starts, the next nearby Ball we own
--- in workspace.Thrown is walked through every valid target in range, nearest first.
----------------------------------------------------------------------------------------------
 local yusuke = {enabled = correctGame and canCheckOwner, available = correctGame and canCheckOwner,
     teamMode = "enemies", last = "waiting for a gun move", shots = 0}
 state.Yusuke = yusuke
@@ -611,7 +538,7 @@ if yusuke.available then
                 if not alive or not yusuke.enabled or not ball.Parent or player.Character ~= character
                     or os.clock() - started > 20 then break end
                 if target.root.Parent and target.humanoid.Health > 0 then
-                    -- Hold for a few physics frames so the hit replicates.
+
                     for _ = 1, 5 do
                         if not ball.Parent or not target.root.Parent then break end
                         ball.CFrame = target.root.CFrame
@@ -665,10 +592,6 @@ else
     yusuke.last = "not available (needs isnetworkowner)"
 end
 
----------------------------------------------------------------------------------------------
--- Assist: Krillin kiblast redirect. Each kiblast part is pinned onto one random valid player
--- for a short hold; parts that arrive within the volley gap share that target.
----------------------------------------------------------------------------------------------
 local krillin = {enabled = correctGame, teamMode = "enemies", fallback = false,
     volleyGap = 0.35, holdTime = 0.40, volleys = 0, last = "waiting for kiblast"}
 state.Krillin = krillin
@@ -726,13 +649,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Auto block. An enemy's M1 shows up as a one-shot animation about 0.2s before it lands, and a
--- move adds a "UsingSkill" value to their character as it starts. Either one, close enough,
--- holds block for a moment through the game's own Block action. Moves tagged "Guardbreaks" go
--- straight through block, so those are left alone. The 5th hit of an M1 chain knocks block
--- off and the game refuses it for a few seconds; nothing input-side gets around that.
----------------------------------------------------------------------------------------------
 local autoBlock = {enabled = false, range = 14, hold = 0.45, skipGuardbreaks = true, whileFarming = false,
     faceCheck = true, faceAngle = 75, pingComp = true, reactMs = 0, missChance = 0, letFinisher = false,
     last = "off", blocks = 0}
@@ -742,8 +658,6 @@ do
     local holdUntil, holding, pressedAt = 0, false, 0
     local watched = setmetatable({}, {__mode = "k"})
 
-    -- when you hit someone their flinch is a one-shot animation too, so for a moment after any
-    -- attack of yours (your own presses or the farm's) those don't count
     local lastOwnAttack = -math.huge
     for _, name in ipairs({"MouseClick", "Move1", "Move2", "Move3", "Move4", "Move5"}) do
         local action = gameAction(name)
@@ -752,8 +666,6 @@ do
 
     local function myRoot() return Game.ownRoot() end
 
-    -- players and their summons by team; your own summons and teammates' never count, and dummies or
-    -- NPCs with no owner always do
     local function isEnemy(model)
         if model == player.Character then return false end
         local owner = Game.ownerOf(model)
@@ -769,8 +681,6 @@ do
         return move ~= nil and CollectionService:HasTag(move, "Guardbreaks")
     end
 
-    -- after letting a chain's 5th hit through, block stays down for a moment so the game doesn't
-    -- count it as blocked and knock block off for seconds
     local quietUntil = 0
 
     local function trigger(model, root, seconds, reach, why)
@@ -779,7 +689,7 @@ do
         if not mine or (root.Position - mine.Position).Magnitude > reach then return end
         if not isEnemy(model) then return end
         if not autoBlock.whileFarming and state.Bot and state.Bot.enabled then return end
-        -- someone swinging the other way isn't attacking you
+
         if autoBlock.faceCheck then
             local toMe = (mine.Position - root.Position) * Vector3.new(1, 0, 1)
             local look = root.CFrame.LookVector * Vector3.new(1, 0, 1)
@@ -795,14 +705,14 @@ do
             autoBlock.last = "let one through on purpose"
             return
         end
-        -- ping: block has to stay up a little longer, the hit arrives later on your screen
+
         if autoBlock.pingComp then seconds = seconds + timing.ping end
         local function arm()
             if not autoBlock.enabled or os.clock() < quietUntil then return end
             holdUntil = math.max(holdUntil, os.clock() + seconds)
             autoBlock.last = why
         end
-        -- a human-looking reaction: somewhere between half and all of the set delay
+
         if autoBlock.reactMs > 0 then
             task.delay(autoBlock.reactMs / 1000 * (0.5 + math.random() * 0.5), arm)
         else
@@ -810,8 +720,6 @@ do
         end
     end
 
-    -- each attacker's M1 chain: the 5th hit breaks block and locks it for seconds, so when that's
-    -- on, the 5th is let through instead (tested on the Attack Dummy: about 22% less damage)
     local chains = setmetatable({}, {__mode = "k"})
     local function chainHit(model)
         local chain = chains[model]
@@ -880,7 +788,7 @@ do
             holding = false
             setBlock(false)
         elseif want and holding and not blocking and os.clock() - pressedAt > 0.2 then
-            -- block got knocked off while we still want it up: let go and press again
+
             setBlock(false)
             setBlock(true)
             pressedAt = os.clock()
@@ -901,16 +809,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Auto Farm: runs, sprints and dashes to its target and fights it with your own M1s and moves,
--- instead of teleporting. Targets players (by the team check), dummies, or both. Dummies on their
--- own only while you're the only player in the server.
--- Movement goes through Humanoid:Move from a render-step binding just after the character
--- controls (the game's movement script overrides MoveTo), so it moves the way a player does.
--- Routes come from PathfindingService and every waypoint is checked before it's used: no
--- touch-trigger part under or around it (kill bricks, hurt pads, the training pads) and real
--- floor under it. A lookahead every frame stops it before it walks into one anyway.
----------------------------------------------------------------------------------------------
 local bot = {enabled = false, sprint = true, dash = true, useMoves = true, reach = 10, last = "off", target = "none",
     dashes = 0, jumps = 0, targets = "Players", teamMode = "enemies", skipAfk = true, stick = true,
     lockCamera = true, aimMouse = false, targetPlayer = nil, awaken = true, smart = true, targetMode = "nearest", skipUlt = true}
@@ -923,10 +821,10 @@ do
     local lockRoot = nil
     local moveDir, wantJump = Vector3.zero, false
     local hazards, hazardsReady = {}, false
-    local blocked = setmetatable({}, {__mode = "k"}) -- dummies with no safe route, until a time
+    local blocked = setmetatable({}, {__mode = "k"})
     local running = false
     local sprinting = false
-    -- when each dummy last lost health, so one that can't be hurt (the Iframes Dummy) gets dropped
+
     local damagedAt = setmetatable({}, {__mode = "k"})
     local watched = setmetatable({}, {__mode = "k"})
     local function watch(dummy)
@@ -943,8 +841,6 @@ do
 
     local function thrown() return workspace:FindFirstChild("Thrown") end
 
-    -- anything with a touch trigger you could stand on counts: kill bricks, hurt pads, and the
-    -- training map's pads (Death, Hurter, Mode, KillDummies...) which change things when touched
     local function scanHazards()
         local found = {}
         local root = workspace:FindFirstChild("Map") or workspace
@@ -976,7 +872,7 @@ do
 
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    -- move effects (ice, debris, slashes) you can run through don't count as walls
+
     rayParams.RespectCanCollide = true
     local function refreshFilter()
         local ignore = {}
@@ -986,8 +882,6 @@ do
         rayParams.FilterDescendantsInstances = ignore
     end
 
-    -- safe to stand at: solid floor somewhere below (60 studs, so being knocked up into the air
-    -- doesn't read as an edge), and not on or next to a hazard
     local function safeAt(pos)
         local hit = workspace:Raycast(pos + Vector3.new(0, 3, 0), Vector3.new(0, -60, 0), rayParams)
         if not hit then return false, "no floor" end
@@ -998,7 +892,6 @@ do
         return true
     end
 
-    -- everything it may go after: players by the team check (and not AFK), and/or the dummies
     local function dummies()
         local list = {}
         if bot.targets ~= "Dummies" then
@@ -1026,8 +919,6 @@ do
         return list
     end
 
-    -- how hard a target is to get to and kill, in studs: its distance, plus extra for running away fast,
-    -- for health left and for holding block. Nearest mode is plain distance
     local function cost(dummy, from)
         local distance = (dummy.root.Position - from).Magnitude
         if bot.targetMode == "nearest" then return distance end
@@ -1047,8 +938,6 @@ do
         return best, bestCost
     end
 
-    -- a route to somewhere next to the dummy whose every waypoint is safe, trying the near side
-    -- first and then the other sides
     local function route(from, dummy)
         local center = dummy.root.Position
         local toward = (from - center) * Vector3.new(1, 0, 1)
@@ -1067,7 +956,7 @@ do
                     local waypoints = path:GetWaypoints()
                     local clean = true
                     for _, waypoint in ipairs(waypoints) do
-                        -- the first few studs are where you already stand; you have to be able to leave
+
                         if (waypoint.Position - from).Magnitude > 6 and not safeAt(waypoint.Position) then clean = false break end
                     end
                     if clean then return waypoints end
@@ -1076,8 +965,6 @@ do
         end
     end
 
-    -- moves, dashes and getting hit all drop you out of a sprint, and the game doesn't put you back.
-    -- the fastest you've been while sprinting is kept, and dropping well under it presses Run again
     local sprintPressedAt, runSpeed = 0, nil
     local function setSprint(on)
         local action = gameAction("Run")
@@ -1101,7 +988,6 @@ do
         end
     end
 
-    -- a straight dash is only taken when the whole line to the dummy is clear and safe
     local lastDash = -math.huge
     local function tryDash(rootPart, targetPos)
         if not bot.dash or os.clock() - lastDash < 2.5 then return end
@@ -1118,12 +1004,10 @@ do
         tapAction("Dodge")
     end
 
-    -- M1 lands out to 9.8 studs root to root (measured on a dummy), so swings start a bit inside that
     local M1_REACH = 9.5
 
     local lastSwing, lastMove, lastAwaken = 0, 0, 0
 
-    -- whether your move in hotbar slot `index` is tagged as a guard break
     local function guardBreaker(index)
         local backpack = player:FindFirstChildOfClass("Backpack")
         if not backpack then return false end
@@ -1140,16 +1024,12 @@ do
         if (look - rootPart.Position).Magnitude > 0.5 then rootPart.CFrame = CFrame.lookAt(rootPart.Position, look) end
     end
 
-    -- a ready move, or nil. on someone holding block only a guard break is worth it
     local function readyMove(blocking)
         for index = 1, 4 do
             if Game.ownMoveReady(index) and (not blocking or guardBreaker(index)) then return index end
         end
     end
 
-    -- faces the target and fights: awakening when the bar is full, a ready move inside the attack
-    -- range, M1s inside M1 reach. M1s into a block do nothing, so on a blocker it waits for a guard
-    -- break instead. the presses run on their own thread so the chase never stalls on them
     local function attack(dummy, rootPart, dist)
         face(dummy, rootPart)
         local blocking = bot.smart and Game.isBlocking(dummy.model)
@@ -1172,7 +1052,6 @@ do
         end
     end
 
-    -- whether you can run straight at a spot: nothing in the way and safe floor the whole way
     local function clearLine(from, to)
         local offset = (to - from) * Vector3.new(1, 0, 1)
         if offset.Magnitude < 1 then return true end
@@ -1184,7 +1063,6 @@ do
         return true
     end
 
-    -- a fresh route starts at the waypoint after the one you're nearest, never one already behind you
     local function firstAhead(waypoints, from)
         local best, bestDistance = 1, math.huge
         for i, waypoint in ipairs(waypoints) do
@@ -1210,7 +1088,7 @@ do
                 bot.last = "waiting to respawn"
                 task.wait(0.5)
             elseif state.Spawner and state.Spawner.InLobby() then
-                -- the lobby is its own island; nobody in the match can be reached from it
+
                 moveDir = Vector3.zero
                 setSprint(false)
                 pathTarget, path = nil, nil
@@ -1225,15 +1103,14 @@ do
                 task.wait(0.5)
             else
                 refreshFilter()
-                -- a player who left, changed team or went AFK is dropped
+
                 local keep = pathTarget and pathTarget.model.Parent and pathTarget.humanoid.Health > 0
                     and (not pathTarget.player or (pathTarget.player.Parent == Players
                         and Game.teamAllows(pathTarget.player, bot.teamMode)
                         and not (bot.skipAfk and Game.onAfkTeam(pathTarget.player))))
                     and not (bot.skipUlt and Game.untouchable(pathTarget.model))
                 if keep and bot.targetMode == "nearest" then
-                    -- whoever is closest, looked at ten times a second; a stud of slack so two people
-                    -- the same distance away don't flip it back and forth every frame
+
                     if os.clock() - lastNearestCheck > 0.1 then
                         lastNearestCheck = os.clock()
                         local best = pickTarget(rootPart.Position)
@@ -1243,8 +1120,7 @@ do
                         end
                     end
                 elseif keep and os.clock() - lastNearestCheck > 0.5 and os.clock() - chaseStart > 1.5 then
-                    -- easiest kill: moves to a clearly easier one; stay on one: only to a far easier one.
-                    -- at least a second and a half on a target first, so it doesn't flick between two
+
                     lastNearestCheck = os.clock()
                     local best, bestCost = pickTarget(rootPart.Position)
                     if best and best.model ~= pathTarget.model then
@@ -1252,8 +1128,7 @@ do
                         if bestCost < current * (bot.targetMode == "stay" and 0.5 or 0.8) then keep = false end
                     end
                 end
-                -- chased for 8 seconds and never got in reach: they're outrunning it, try someone else
-                -- (not in nearest mode, which goes for whoever is closest no matter what)
+
                 if keep and bot.targetMode ~= "nearest" and chaseTarget == pathTarget.model and os.clock() - chaseStart > 8 then
                     blocked[pathTarget.model] = os.clock() + 6
                     bot.last = pathTarget.model.Name .. " keeps getting away, switching"
@@ -1265,8 +1140,7 @@ do
                     moveDir = Vector3.zero
                     bot.target = "none"
                     bot.targetPlayer, lockRoot = nil, nil
-                    -- boxed in (knocked onto the pad platform, say): head for the nearest open safe
-                    -- spot and let every dummy be tried again from there
+
                     local escape
                     for _, radius in ipairs({10, 18, 28}) do
                         for angle = 0, 315, 45 do
@@ -1304,15 +1178,14 @@ do
                     watch(dummy)
                     if chaseTarget ~= dummy.model then chaseTarget, chaseStart = dummy.model, os.clock() end
                     if dist <= M1_REACH and level then
-                        -- close enough to hit: swing, and keep closing in meanwhile
+
                         path = nil
                         chaseStart = os.clock()
                         setSprint(bot.sprint and dist > 6)
                         if fightTarget ~= dummy.model then fightTarget, fightStart = dummy.model, os.clock() end
                         local patience = dummy.player and 8 or 4
                         if os.clock() - fightStart > patience and (damagedAt[dummy.model] or 0) < fightStart then
-                            -- hitting it this long and it hasn't lost any health (a player blocking
-                            -- gets longer than a dummy)
+
                             blocked[dummy.model] = os.clock() + (dummy.player and 10 or 30)
                             pathTarget, fightTarget = nil, nil
                             moveDir = Vector3.zero
@@ -1320,7 +1193,7 @@ do
                         else
                             bot.last = "fighting " .. dummy.model.Name
                             pathTarget = dummy
-                            -- toward where they're about to be, so someone backing off doesn't slip out
+
                             local ahead = dummy.root.Position + dummy.root.AssemblyLinearVelocity * Vector3.new(1, 0, 1) * 0.15
                             local to = (ahead - rootPart.Position) * Vector3.new(1, 0, 1)
                             local dir = to.Magnitude > 0.1 and to.Unit or Vector3.zero
@@ -1328,15 +1201,13 @@ do
                             attack(dummy, rootPart, dist)
                         end
                     else
-                        -- straight at them when the way is clear (looked at five times a second), aiming a
-                        -- little ahead of where they're going; a route only when something's in the way
+
                         if os.clock() - clearAt > 0.2 then
                             clear, clearAt = clearLine(rootPart.Position, dummy.root.Position), os.clock()
                         end
                         local direct = false
                         if clear then
-                            -- straight at them; only someone running off gets a short lead (at most 4 studs),
-                            -- so it never curves out to the side after where they might go
+
                             local velocity = dummy.root.AssemblyLinearVelocity * Vector3.new(1, 0, 1)
                             local lead = Vector3.zero
                             if velocity.Magnitude > 2 and velocity.Unit:Dot(gap.Unit) > 0.5 then
@@ -1358,7 +1229,7 @@ do
                             end
                         end
                         if not direct then
-                            -- (re)route when there's no route, every second or so, or when they've moved off
+
                             local moved = pathFrom ~= nil and (dummy.root.Position - pathFrom).Magnitude > 6
                             if not path or dummy ~= pathTarget or moved or os.clock() - pathAt > (dummy.player and 1 or 1.5) then
                                 path, pathTarget, pathAt = route(rootPart.Position, dummy), dummy, os.clock()
@@ -1382,13 +1253,13 @@ do
                                     if toPoint.Magnitude < 2.5 then
                                         index = index + 1
                                     else
-                                        -- one jump per jump waypoint, not one every frame until it's reached
+
                                         if waypoint.Action == Enum.PathWaypointAction.Jump and jumpedAt ~= waypoint then
                                             jumpedAt = waypoint
                                             wantJump = true
                                         end
                                         local dir = toPoint.Unit
-                                        -- one last look before each step
+
                                         if not safeAt(rootPart.Position + dir * 3) then
                                             moveDir, path = Vector3.zero, nil
                                             bot.last = "stopped short of a hazard, rerouting"
@@ -1401,12 +1272,11 @@ do
                                 end
                             end
                         end
-                        -- swing on the way in once they're nearly in reach; with a long attack range, ranged
-                        -- moves go out once they're inside it and in plain sight
+
                         if level and (dist <= M1_REACH + 1 or (bot.reach > M1_REACH and dist <= bot.reach and clear)) then
                             attack(dummy, rootPart, dist)
                         end
-                        -- not getting anywhere: jump, then give up on this route
+
                         if not stuckFrom or (rootPart.Position - stuckFrom).Magnitude > 1.5 then
                             stuckFrom, stuckAt, jumps = rootPart.Position, os.clock(), 0
                         elseif moveDir.Magnitude > 0 and os.clock() - stuckAt > 0.8 then
@@ -1443,7 +1313,7 @@ do
 
     local function bind()
         pcall(function() RunService:UnbindFromRenderStep(CAMERA) end)
-        -- right after the camera script, so its own update doesn't turn the view back
+
         RunService:BindToRenderStep(CAMERA, Enum.RenderPriority.Camera.Value + 1, lockOn)
         pcall(function() RunService:UnbindFromRenderStep(RENDER) end)
         RunService:BindToRenderStep(RENDER, Enum.RenderPriority.Character.Value + 1, function()
@@ -1492,10 +1362,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Auto rejoin. When Roblox shows a kick or disconnect message, rejoin the game. If a loader is
--- set, it is queued to run again in the new server so everything comes back on its own.
----------------------------------------------------------------------------------------------
 local rejoin = {enabled = false, loader = "", last = "off"}
 state.Rejoin = rejoin
 do
@@ -1522,9 +1388,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Shared bar widget for the ESP and target panel
----------------------------------------------------------------------------------------------
 local COLORS = {
     barBack = Color3.fromRGB(20, 20, 24),
     ready = Color3.fromRGB(110, 220, 120), charging = Color3.fromRGB(240, 170, 60),
@@ -1550,7 +1413,6 @@ local function makeText(parent, props)
     return make("TextLabel", props, parent)
 end
 
--- One row per move: name on the left, recharge bar on the right.
 local function makeMoveRows(parent, count, firstOrder, nameWidth, textSize)
     local rows = {}
     for index = 1, count do
@@ -1582,9 +1444,6 @@ end
 
 local function healthColor(fraction) return COLORS.hpLow:Lerp(COLORS.hpHigh, fraction) end
 
----------------------------------------------------------------------------------------------
--- ESP: Highlight outline/fill plus a billboard with name, distance, health, mode and moves.
----------------------------------------------------------------------------------------------
 local esp = {
     enabled = false, shown = 0,
     outline = true, fill = true, labels = true, distance = true,
@@ -1715,9 +1574,6 @@ do
     connect(Players.PlayerRemoving, removeEntry)
 end
 
----------------------------------------------------------------------------------------------
--- Target panel: a draggable card for the farm's target, or else the nearest enemy in range.
----------------------------------------------------------------------------------------------
 local panel = {enabled = false, range = 150, subject = nil}
 state.Panel = panel
 do
@@ -1745,7 +1601,6 @@ do
         TextXAlignment = Enum.TextXAlignment.Left})
     local moveRows = makeMoveRows(frame, 5, 10, 0.6, 11)
 
-    -- Drag from anywhere on the card.
     local dragging, dragStart, startPosition
     connect(frame.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -1825,9 +1680,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Mode alerts: a notification when a player's mode bar fills.
----------------------------------------------------------------------------------------------
 local alerts = {enemies = false, own = false, enemiesOnly = true}
 state.Alerts = alerts
 do
@@ -1840,8 +1692,7 @@ do
             for _, targetPlayer in ipairs(Players:GetPlayers()) do
                 local fraction = Game.chargeFraction(targetPlayer)
                 local full = fraction >= 1
-                -- First sighting only records the state, so loading the hub doesn't alert for
-                -- bars that were already full. Re-arm once the bar has clearly drained.
+
                 if wasFull[targetPlayer] == nil then
                     wasFull[targetPlayer] = full
                 elseif wasFull[targetPlayer] and fraction < 0.9 then
@@ -1864,15 +1715,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Comp HUD: a reach ring at your feet and a cooldown strip over your focus target (over every
--- enemy while the hold key is down). It only shows what the game already tells every client.
--- Everything is built once and reused, and the ring is a handle adornment that follows you
--- without any per-frame work.
--- M1 reach was measured on a dummy: lands at 9.8 studs root to root, misses at 10. Move
--- hitboxes are server-side, so there is nothing to read for move ranges.
--- COOLDOWN climbs 0..20 in even steps, so one observed step gives that move's seconds left.
----------------------------------------------------------------------------------------------
 local comp = {
     enabled = false, ring = true, reach = 9.5, ringOpacity = 0.55,
     strips = true, stripRange = 80, holdKey = Enum.KeyCode.LeftAlt, fpsSaver = false,
@@ -1885,7 +1727,6 @@ do
 
     local YELLOW = Color3.fromRGB(255, 205, 70)
 
-    -- players by team; dummies and other models without a player count, so training works
     local function enemyModel(model)
         if model == player.Character then return false end
         local owner = Game.ownerOf(model)
@@ -1894,13 +1735,11 @@ do
         return not Game.onAfkTeam(owner) and not Game.sameTeam(owner), owner
     end
 
-    -- reach ring
     local ring = make("CylinderHandleAdornment", {Name = "Reach", Height = 0.06, Radius = comp.reach,
         InnerRadius = comp.reach - 0.18, ZIndex = 0, Visible = false, Color3 = COLORS.dim}, container)
 
     local live = workspace:FindFirstChild("Live")
 
-    -- cooldown learning: seconds per COOLDOWN step, per move name
     local stepTime = {}
     local tracked = setmetatable({}, {__mode = "k"})
     local function learn(move, now)
@@ -1932,7 +1771,6 @@ do
         return #letters > 0 and (letters[1] .. letters[2]) or "?"
     end
 
-    -- one strip per player, built on first sight
     local CELLS, CELL = 5, 22
     local strips = {}
     local function getStrip(targetPlayer)
@@ -1994,7 +1832,6 @@ do
         strip.billboard.Enabled = true
     end
 
-    -- focus: the enemy closest to where the camera looks, else whoever is right next to you
     local function pickFocus(mine)
         local camera = workspace.CurrentCamera
         if not camera then return nil end
@@ -2030,7 +1867,6 @@ do
         local mine, humanoid = Game.ownRoot()
         local on = comp.enabled and alive
 
-        -- ring, every pass
         local showRing = on and comp.ring and not comp.fpsSaver and mine ~= nil
         ring.Visible = showRing
         if showRing then
@@ -2055,7 +1891,6 @@ do
         tick = tick + 1
         if tick % 2 ~= 0 then return end
 
-        -- everything below runs 10 times a second
         for _, targetPlayer in ipairs(Players:GetPlayers()) do
             local backpack = targetPlayer:FindFirstChildOfClass("Backpack")
             if backpack then
@@ -2088,7 +1923,7 @@ do
                 end
             end
         end
-        -- test hook: comp.preview = true draws your own strip, for checking it in an empty server
+
         if comp.preview and player.Character then
             paintStrip(getStrip(player), player, player.Character)
         elseif strips[player] then
@@ -2106,9 +1941,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Session tracker: adds up every increase, since match stats reset to 0 between matches.
----------------------------------------------------------------------------------------------
 local session = {started = os.clock(), gold = 0, kills = 0, deaths = 0, damage = 0}
 state.Session = session
 do
@@ -2136,13 +1968,6 @@ do
     end
 end
 
----------------------------------------------------------------------------------------------
--- Misc: anti-AFK (Roblox idle kick)
----------------------------------------------------------------------------------------------
----------------------------------------------------------------------------------------------
--- Client: tweaks that only change what you see on your screen. Each one puts things back the
--- way it found them when turned off or when the script unloads.
----------------------------------------------------------------------------------------------
 local client = {fullbright = false, noFog = false, noAtmosphere = false, noDecals = false, noParticles = false,
     fpsBoost = false, streamer = false}
 state.Client = client
@@ -2175,7 +2000,6 @@ do
         end
     end
 
-    -- the game resets lighting on map changes, so fullbright and no fog are reapplied every second
     local function applyLighting()
         if client.fullbright then
             Lighting.Brightness = 2
@@ -2243,7 +2067,7 @@ do
                 saved.fps = nil
             end
         elseif key == "streamer" then
-            -- hides the player list, which shows everyone's names; off puts back whatever it was before
+
             if on then
                 local ok, shown = pcall(function() return StarterGui:GetCoreGuiEnabled(Enum.CoreGuiType.PlayerList) end)
                 saved.playerList = not ok or shown
@@ -2288,11 +2112,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Macros: records your own presses of the game's actions (M1, moves, block, dodge, run, mode)
--- with their timing, and plays them back through the same actions, so playback works with Roblox
--- in the background. Saved as JSON under BPHubABA/macros, and shareable as a code.
----------------------------------------------------------------------------------------------
 local MACRO_ACTIONS = {"MouseClick", "Move1", "Move2", "Move3", "Move4", "Move5", "Block", "Dodge", "Run", "UseMode"}
 local macro = {recording = false, playing = false, loop = false, speed = 1, events = {}, last = "nothing recorded"}
 state.Macro = macro
@@ -2311,7 +2130,6 @@ do
         return string.format("%d presses, %.1fs", #macro.events, length())
     end
 
-    -- what you press while recording; playback's own presses come through here too, so those are skipped
     for _, name in ipairs(MACRO_ACTIONS) do
         local action = gameAction(name)
         if action then
@@ -2339,7 +2157,7 @@ do
     macro.StopRecording = function()
         if not macro.recording then return end
         macro.recording = false
-        -- start the macro at its first press, and let go of anything still held at the end
+
         local events = macro.events
         local first = events[1] and events[1].t or 0
         local down = {}
@@ -2399,7 +2217,6 @@ do
         end)
     end
 
-    -- files
     local function ensureFolder()
         if type(isfolder) ~= "function" or type(makefolder) ~= "function" then return end
         if not isfolder("BPHubABA") then makefolder("BPHubABA") end
@@ -2494,10 +2311,6 @@ connect(player.Idled, function()
     end)
 end)
 
--- Auto spawn: the lobby (HUD Line1 showing, no health bar) picks a character and presses Play the way
--- the character menu does, through Backpack.Input ("CharacterButton", name then "ClickPlay"). The
--- game's AFK team is the server's call (it counts MinutesAfk itself), so the most a client can do is
--- press the afk button again when it puts you there, which is all "Stay off the AFK team" does
 local spawner = {enabled = false, character = "", noAfk = false, last = "off"}
 state.Spawner = spawner
 do
@@ -2517,7 +2330,6 @@ do
         return line ~= nil and line.Visible and not (health and health.Visible)
     end
 
-    -- the names the character menu's buttons carry, which is what the server takes
     function spawner.Characters()
         local gui = hud()
         local select = gui and gui:FindFirstChild("CharacterSelect")
@@ -2535,7 +2347,6 @@ do
         return names
     end
 
-    -- the typed name matched to a real button (any case, or the start of one); blank is the last played
     local function pick()
         local wanted = spawner.character:lower():gsub("^%s+", ""):gsub("%s+$", "")
         if wanted == "" then return player:GetAttribute("LastLoadedChar") end
@@ -2560,7 +2371,7 @@ do
                     elseif browsing then
                         spawner.last = "waiting, the character menu is open"
                     elseif os.clock() - lobbySince > 2 and os.clock() - pressedAt > 4 then
-                        -- a moment in the lobby first, so a menu you're about to open isn't run over
+
                         pressedAt = os.clock()
                         spawner.last = "spawning as " .. name
                         remote:FireServer("CharacterButton", name)
@@ -2585,8 +2396,6 @@ do
     end)
 end
 
--- Server hop: when the Auto Farm has had nobody to go after for a while (the server emptied out, or
--- only your team is left), joins another ABA server. The rejoin loader is queued so the hub comes back
 local hop = {enabled = false, after = 90, last = "off"}
 state.Hop = hop
 do
@@ -2614,14 +2423,10 @@ do
     end)
 end
 
--- elements the Overnight button switches on, filled in as the menu is built
 local presetToggles = {}
 
----------------------------------------------------------------------------------------------
--- UI
----------------------------------------------------------------------------------------------
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.5.6", 
+    return BPUI:CreateWindow({Version = "1.5.6",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -2631,8 +2436,8 @@ end)
 if not created then cleanup() error("Window creation failed: " .. tostring(result)) end
 window = result
 
-local ui = {}       -- labels the status loop updates
-local toggles = {}  -- every on/off feature, for the panic key
+local ui = {}
+local toggles = {}
 
 local function addToggle(section, config)
     local element = section:AddToggle(config)
@@ -2645,7 +2450,6 @@ local function teamDropdown(section, flag, onChange)
         Flag = flag, Callback = function(value) onChange(Game.teamModes[value] or "enemies") end})
 end
 
--- Overview
 local overviewTab = window:CreateTab({Name = "Overview", Icon = "home"})
 do
     local info = overviewTab:CreateSection("Info")
@@ -2680,7 +2484,6 @@ do
     end
 end
 
--- Auto Farm
 local farmTab = window:CreateTab({Name = "Auto Farm", Icon = "crosshair"})
 do
     local section = farmTab:CreateSection("Auto Farm")
@@ -2770,7 +2573,6 @@ do
     end})
 end
 
--- Defense
 local defenseTab = window:CreateTab({Name = "Defense", Icon = "shield"})
 do
     local section = defenseTab:CreateSection("Auto block")
@@ -2817,7 +2619,6 @@ do
     tuning:AddLabel({Text = "the 5th hit of an M1 chain knocks block off for a few seconds; nothing gets around that", Style = "Sub"})
 end
 
--- Visuals
 local visualsTab = window:CreateTab({Name = "Visuals", Icon = "eye"})
 do
     local espSection = visualsTab:CreateSection("ESP")
@@ -2876,7 +2677,6 @@ do
         Callback = function(value) alerts.own = value == true end})
 end
 
--- Comp
 local compTab = window:CreateTab({Name = "Comp", Icon = "trophy"})
 do
     local hud = compTab:CreateSection("Comp HUD")
@@ -2916,7 +2716,6 @@ do
     cds:AddLabel({Text = "seconds show after a move has ticked once; before that, its initials", Style = "Sub"})
 end
 
--- Player Info
 local playerInfoTab = window:CreateTab({Name = "Player Info", Icon = "users"})
 local playerInfoSection = playerInfoTab:CreateSection("Players")
 ui.playerCount = playerInfoSection:AddLabel({Text = "loading...", Style = "Sub"})
@@ -2958,11 +2757,8 @@ local function refreshPlayerInfo()
     ui.playerCount:Set(#list .. " players")
 end
 
--- Characters
--- one tab, a section per character
 local charactersTab = window:CreateTab({Name = "Characters", Icon = "users"})
 
--- Adds the toggle + keybind + status label every assist uses; returns the status label.
 local function assistControls(section, config)
     local element = addToggle(section, {Name = config.name, Default = config.default, Flag = config.flag,
         Description = config.description, Callback = config.callback})
@@ -3078,7 +2874,6 @@ do
         Flag = "krillin_hold", Callback = function(value) krillin.holdTime = tonumber(value) or 0.4 end})
 end
 
--- Client
 local clientTab = window:CreateTab({Name = "Client", Icon = "monitor"})
 do
     local look = clientTab:CreateSection("Visuals")
@@ -3105,7 +2900,6 @@ do
     other:AddLabel({Text = "rejoin and server hop are in Misc, and in the hub's Utilities tab", Style = "Sub"})
 end
 
--- Macros
 local macroTab = window:CreateTab({Name = "Macros", Icon = "list"})
 do
     local function say(text, kind)
@@ -3183,7 +2977,6 @@ do
     end})
 end
 
--- Misc
 local miscTab = window:CreateTab({Name = "Misc", Icon = "settings"})
 do
     local general = miscTab:CreateSection("General")
@@ -3212,9 +3005,6 @@ do
         server:AddLabel({Text = "this executor can't run things after a teleport, so only the rejoin works", Style = "Sub"})
     end
 
-    -- Self check: every game object and executor function a feature relies on. ABA updates
-    -- can rename these, so this names the feature that broke instead of it silently doing
-    -- nothing. "soft" checks can legitimately be missing outside a match.
     local replicated = game:GetService("ReplicatedStorage")
     local function find(root, ...)
         local node = root
@@ -3304,9 +3094,6 @@ do
     end)
 end
 
----------------------------------------------------------------------------------------------
--- Start
----------------------------------------------------------------------------------------------
 if player.Character then bindYuji(player.Character) end
 connect(player.CharacterAdded, bindYuji)
 
@@ -3316,7 +3103,6 @@ pcall(function()
         Type = supported and "Success" or "Warning", Duration = 4})
 end)
 
--- Only refresh what is on screen: Player Info and the farm preview are the expensive parts.
 local function tabOpen(tab)
     local ok, open = pcall(function() return window._visible ~= false and window._activeTab == tab end)
     return not ok or open

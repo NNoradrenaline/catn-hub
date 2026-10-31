@@ -1,7 +1,3 @@
--- climb for animals eggs: auto farm
--- plays the loop the way a player does: climbs the tower, takes the best egg it can reach,
--- brings it down, places and hatches it, then spends the cash, trains and rebirths
-
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local Players = game:GetService("Players")
@@ -19,16 +15,10 @@ end
 
 local BPUI = ...
 
-
--- the game's own modules. knit only hands out controllers once the game has started it
-
 local src = rs:WaitForChild("src")
 local knit = require(src:WaitForChild("Packages"):WaitForChild("knit"))
 pcall(function() knit.OnStart():await() end)
 
--- connecting to the game's remote signal wrappers drops this thread's executor permissions, and the
--- window lives where only those can reach it. this puts them back; call it before touching the ui
--- from any thread that has called into game code
 local function elevate()
     if setthreadidentity then pcall(setthreadidentity, 8) end
 end
@@ -74,13 +64,9 @@ for _, name in ipairs({"EggPlacementService", "AnimalSellService", "StaminaUpgra
     svc[name] = getService(name)
 end
 
--- movement goes through the game's own input actions, the same ones WASD and space feed,
--- so it works with roblox in the background and climbing behaves exactly like a player's
 local charContext = StarterPlayer:WaitForChild("PlayerModule"):WaitForChild("InputContexts"):WaitForChild("CharacterContext")
 local MoveAction = charContext:WaitForChild("MoveAction")
 local JumpAction = charContext:WaitForChild("JumpAction")
-
--- state
 
 local alive = true
 local conns = {}
@@ -125,7 +111,7 @@ local stats = {started = os.clock(), taken = 0, lost = 0, placed = 0, hatched = 
 local logLines = {}
 local lastLog, lastLogAt = nil, 0
 local function log(msg)
-    -- the same line again within a minute is noise
+
     if msg == lastLog and os.clock() - lastLogAt < 60 then return end
     lastLog, lastLogAt = msg, os.clock()
     table.insert(logLines, 1, os.date("%H:%M:%S") .. "  " .. msg)
@@ -156,7 +142,6 @@ local function short(n)
     return (string.format("%.2f", n):gsub("%.?0+$", "")) .. SUFFIX[i]
 end
 
--- knit calls give back promises; this waits for one and returns the reply table, or nil and why
 local function call(service, method, ...)
     local s = svc[service]
     if not s or type(s[method]) ~= "function" then return nil, service .. "." .. method .. " is missing" end
@@ -173,8 +158,6 @@ local function reasonOf(res, err)
     if type(res) == "table" and res.Reason then return tostring(res.Reason) end
     return tostring(err or "refused")
 end
-
--- what things are worth: an egg is worth the cash per second of the animal inside, times its variant
 
 local variantMult = {}
 for _, v in pairs(eggConfig.Variants or {}) do
@@ -203,7 +186,6 @@ local function eggLabel(eggName, variant)
     return name .. " (" .. rarityOf(eggName) .. ")"
 end
 
--- every animal you own, whether it's out on the base, and what it earns
 local function animals()
     local inv, eq = data("Inventory") or {}, data("EquippedAnimals") or {}
     local list = {}
@@ -217,7 +199,6 @@ local function animals()
     return list
 end
 
--- the least an egg has to be worth to improve the base: 0 while there are free slots
 local function worstOnBase()
     local maxAnimals = tonumber(data("MaxAnimals")) or 7
     local n, worst = 0, math.huge
@@ -230,8 +211,6 @@ local function worstOnBase()
     if n < maxAnimals then return 0 end
     return worst
 end
-
--- character and movement
 
 local function getChar()
     local c = plr.Character
@@ -246,7 +225,6 @@ local function flat(v)
     return Vector3.new(v.X, 0, v.Z)
 end
 
--- hold a direction in world space; MoveAction is camera relative like WASD, so turn it into that
 local function steer(dir)
     dir = flat(dir)
     if dir.Magnitude < 0.001 then
@@ -287,7 +265,6 @@ local function status(s)
     farm.status = s
 end
 
--- walks toward a point; jumps when it stops making progress. returns true, or false and why
 local function walkTo(id, point, radius, limit)
     radius = radius or 2.5
     limit = limit or 20
@@ -324,8 +301,6 @@ local function walkTo(id, point, radius, limit)
     return false, "stopped"
 end
 
--- your base
-
 local function myBase()
     if not Bases then return nil end
     local okb, b = pcall(Bases.GetBase, Bases)
@@ -347,7 +322,6 @@ local function insidePlot(pos)
     return math.abs(p.X) < size.X / 2 + 1 and math.abs(p.Z) < size.Z / 2 + 1
 end
 
--- the two sides of your gate, so walks in and out of the base don't run into the fence
 local function gatePoints()
     local b = myBase()
     local gate = b and b:FindFirstChild("Gate")
@@ -378,11 +352,6 @@ local function travel(id, point, radius, limit)
     return walkTo(id, point, radius, limit)
 end
 
--- the towers: the main one, and the halloween event's copy of it far off along z. each is one wall
--- of trusses with a start pad in front of its climbing face, found from the map, with the numbers
--- they had when this was written as a fallback
-
--- the wall's x and z span from its bottom trusses, and how high it goes in all
 local function wallNear(folder, near, fallback)
     local minZ, maxZ, sumX, n, top = math.huge, -math.huge, 0, 0, -math.huge
     if folder then
@@ -417,19 +386,17 @@ do
         local start = zones and typeof(zones.DimensionLadderStart) == "Vector3" and zones.DimensionLadderStart
             or Vector3.new(2210.17, 73.74, 4553.02)
         local dx, dmin, dmax, dtop = wallNear(dimension, start, {wallX = 2210.17, minZ = 4526, maxZ = 4580})
-        -- built the same way round as the main one, so the pad goes on the same side of its wall
+
         towers.halloween = {name = "halloween", pad = Vector3.new(dx + nx * 1.5, start.Y, start.Z), wallX = dx, nx = nx,
             minZ = dmin, maxZ = dmax, midZ = (dmin + dmax) / 2, top = dtop}
     end
 end
 
--- the tower a trip is on; everything below works off this one
 local tower = towers.main
 local function useWorld(name)
     tower = towers[name] or towers.main
 end
 
--- every egg biome: the main tower's from the zone config, plus the halloween islands
 local BIOMES = {}
 for name, z in pairs(zoneConfig) do
     if name ~= "Lobby" and type(z) == "table" and type(z.Height) == "number" then
@@ -445,9 +412,6 @@ if towers.halloween then
     end
 end
 
--- every island has a platform just past each end of the wall, and a corridor around the wall's end
--- into the egg field behind it. walking straight past the end grabs the trusses, so walks go
--- through these points: `corner` is on the field side, `outer` on the platform, `shaft` the drop
 local function sidePoints(low)
     local z = low and (tower.minZ - 8) or (tower.maxZ + 8)
     local shaftZ = low and (tower.minZ + 6) or (tower.maxZ - 6)
@@ -467,8 +431,7 @@ local function floorOf(biome)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = plr.Character and {plr.Character} or {}
-    -- right where the corridor runs past the wall's end; further out some islands have decorations
-    -- overhanging the platform (the witches castle does)
+
     local origin = Vector3.new(t.wallX + t.nx * 3, info.height + 40, t.minZ - 8)
     for _ = 1, 10 do
         local hit = workspace:Raycast(origin, Vector3.new(0, -140, 0), params)
@@ -488,7 +451,6 @@ for _, g in ipairs(staminaUpgradeConfig.BiomeGates or {}) do
     if type(g) == "table" and g.Name then gateLevel[g.Name] = tonumber(g.Level) or math.huge end
 end
 
--- the halloween portal: open while the event runs, and once you've got the speed it asks for
 local portalConfig = require(config.Gameplay.portalConfig)
 local function halloweenOpen()
     if not towers.halloween or rs:GetAttribute(portalConfig.OpenAttribute or "HalloweenPortalOpen") ~= true then return false end
@@ -500,9 +462,6 @@ local function halloweenOpen()
     return (tonumber(data("Speed")) or 0) >= (tonumber(portalConfig.UnlockSpeed) or math.huge)
 end
 
--- the island at the very top of a tower (the main one's swaps between two biomes every restock):
--- the ladder ends at its floor, so you climb on over the top onto it instead of stepping off the
--- wall's end, and leave by walking off its front into the shaft
 local function isTop(biome)
     local info = BIOMES[biome]
     local t = info and towers[info.world]
@@ -514,7 +473,6 @@ local function topFloor(floorY)
     return tower.top ~= nil and floorY + 10 > tower.top
 end
 
--- where to walk off the top island: over the wall into the shaft in front of it
 local function topDrop(from)
     return Vector3.new(tower.wallX + tower.nx * 6, 0, math.clamp(from.Z, tower.minZ + 4, tower.maxZ - 4))
 end
@@ -522,15 +480,15 @@ end
 local function reachable(biome)
     local info = BIOMES[biome]
     if not info then return false end
-    -- for testing: keep to one tower, or one biome
+
     if settings.onlyWorld and info.world ~= settings.onlyWorld then return false end
     if settings.onlyBiome and biome ~= settings.onlyBiome then return false end
-    -- only the main tower's top has been tried; the event tower's is the witches castle
+
     if isTop(biome) and info.world ~= "main" then return false end
     local level = tonumber(data("StaminaLevel")) or 1
     if info.world == "halloween" then
         if not settings.halloween or not halloweenOpen() then return false end
-        -- no gates out there: whatever your stamina reaches
+
         local okh, reach = pcall(staminaUpgradeConfig.GetReachHeight, level)
         return okh and tonumber(reach) ~= nil and info.height <= reach
     end
@@ -551,8 +509,6 @@ local function currentWorld()
     return r and worldAt(r.Position) or "main"
 end
 
--- day and night: eggs restock at night, and anyone caught carrying one then drops it
-
 local function nightState()
     local t = workspace:GetServerTimeNow()
     local okn, isNight = pcall(dayCycle.IsNight, t)
@@ -561,8 +517,6 @@ local function nightState()
     return okn and isNight == true, okt and (nightAt - t) or math.huge, okd and (dayAt - t) or 0
 end
 
--- how fast you climb comes from your Speed stat, not the humanoid: that reads 0 on the treadmill.
--- the last real climb is kept as a ratio to it, so it still fits after a rebirth resets your speed
 local climbRatio = 0.7
 local function climbWalkSpeed()
     local okw, ws = pcall(speedCurve.ToWalkSpeed, tonumber(data("Speed")) or 250)
@@ -574,8 +528,6 @@ local function climbWalkSpeed()
     return math.max(ws, 1)
 end
 
--- how long a trip to a biome takes: walk to the pad at 26, climb, the island (carrying an egg you
--- walk at 10), then the fall
 local function tripTime(biome)
     local info = BIOMES[biome]
     local t = towers[info and info.world or "main"] or towers.main
@@ -583,7 +535,7 @@ local function tripTime(biome)
     local _, _, r = getChar()
     local walk = 8
     if r then
-        -- a trip to the other world goes through the portal first, about 15 seconds all in
+
         walk = worldAt(r.Position) == t.name and flat(t.pad - r.Position).Magnitude / 26 or 15
     end
     local climb = math.max(0, floor + 8 - t.pad.Y - (staminaUpgradeConfig.ClimbBoostHeight or 125))
@@ -591,15 +543,11 @@ local function tripTime(biome)
     return walk + 2 + climb / (climbWalkSpeed() * climbRatio) + 16 + fall + 3
 end
 
--- guards: one per island. it ignores you until you carry an egg inside its zone (the island's Area
--- box, which stops just short of the wall), then runs at you at 18 while you carry at 10, aiming
--- at where you were every 0.2s. leave the zone and it gives up. so the trick is picking the moment
-
 local CHASE = tonumber(guardConfig.ChaseSpeed) or 18
 local REPATH = tonumber(guardConfig.ChaseRepathInterval) or 0.2
--- a patrol walk crosses the field in 5 seconds; this is a quick one
+
 local PATROL = 12
--- your own half width, on top of a guard's hitbox reach
+
 local BODY = 1.5
 
 local function carrySpeed()
@@ -618,8 +566,6 @@ local function guardsJailed()
     return workspace:GetServerTimeNow() < (tonumber(workspace:GetAttribute("GuardsJailedUntil")) or 0)
 end
 
--- how far a guard's hitbox reaches from its middle, whichever way it faces. they're big animals,
--- so this is often 9 or 10 studs
 local reachCache = setmetatable({}, {__mode = "k"})
 local function hitboxReach(box, pivot)
     if not box or not box.Parent then return 10 end
@@ -635,9 +581,6 @@ local function hitboxReach(box, pivot)
     return reach
 end
 
--- the guards on an island, read from the game's own guard ai: where each one is, how far it
--- reaches, and what its patrol is doing (standing until `left` seconds from now, or walking to
--- `target` and getting there in `left`)
 local function guardsNear(floorY)
     local list = {}
     local now = os.clock()
@@ -655,8 +598,7 @@ local function guardsNear(floorY)
             end
         end
     end
-    -- the halloween islands also have wandering monsters. the server walks them in straight lines and
-    -- says where to, so they go in as small guards that chase at their own walking pace
+
     local dimension = workspace:FindFirstChild("HalloweenDimension")
     local monsters = dimension and dimension:FindFirstChild("ActiveMiniMonsters")
     if monsters then
@@ -678,7 +620,7 @@ local function guardsNear(floorY)
         end
     end
     if GuardAi and type(GuardAi.Guards) == "table" then return list end
-    -- without the guard ai, all we know is where they stand
+
     local folder = workspace:FindFirstChild("LocalGuards")
     if not folder then return list end
     for _, m in ipairs(folder:GetChildren()) do
@@ -703,7 +645,6 @@ local function clampToZone(area, p)
     return Vector3.new(w.X, 0, w.Z)
 end
 
--- the way out with an egg: through the corridor past the wall's end, onto the platform
 local function escapeRoute(from, low)
     local side = sidePoints(low)
     return {flat(from), side.corner, side.outer}
@@ -715,11 +656,6 @@ local function routeLength(route)
     return n
 end
 
--- plays the chase forward the way the game runs it: you stand still through the hold while the guard
--- keeps to its patrol, then you walk the route and it heads for where you were at its last repath.
--- the least clearance between its hitbox and you before you're out of its zone. `startStay` is time
--- spent chased but standing still before walking (reacting, or dropping off the wall), `endStay` time
--- still in reach at the end of the route (getting onto the wall and climbing out of its zone)
 local function closestApproach(route, area, guard, hold, startStay, endStay)
     local speed = carrySpeed()
     local me, g = route[1], guard.pos
@@ -732,14 +668,14 @@ local function closestApproach(route, area, guard, hold, startStay, endStay)
         t = t + dt
         if t <= hold then
             if guard.state == "Walk" and guard.target then
-                -- walking its patrol: on to its target, then it stands there a few seconds
+
                 if t < guard.left then
                     local d = guard.target - g
                     local step = guard.speed * dt
                     if d.Magnitude <= step then g = guard.target else g = g + d.Unit * step end
                 end
             elseif guard.state ~= "Idle" or t >= guard.left then
-                -- about to set off somewhere we can't know: assume it's your way
+
                 local d = me - g
                 if d.Magnitude > 0.5 then g = g + d.Unit * math.min(PATROL * dt, d.Magnitude) end
             end
@@ -774,30 +710,24 @@ local function closestApproach(route, area, guard, hold, startStay, endStay)
     return closest
 end
 
--- the back of the tower wall is climbable from the egg field, and climbing goes at your Speed stat
--- rather than the carrying speed. the guard's zone only reaches 18 studs up, so getting onto the
--- wall and up is a second way out
 local function backFacePoint(pos)
-    -- a step short of the trusses, which is just inside the guard's zone; the climb gets you out
+
     return Vector3.new(tower.wallX - tower.nx * 2.3, 0, math.clamp(pos.Z, tower.minZ + 2, tower.maxZ - 2))
 end
 
--- how long you're still in reach once at the wall: grabbing on, then climbing out of the zone
 local function wallClimbTime()
     return 0.5 + 20 / math.max(climbWalkSpeed() * climbRatio, 8)
 end
 
 local REACT = 0.15
 
--- whether grabbing from `from` right now gets away, and which way to run: round either end of the
--- wall, or up the back of it
 local function escapePlan(from, biome, floorY, hold)
     local area = guardZone(biome)
     local guards = (area and not guardsJailed()) and guardsNear(floorY) or {}
     local options = {}
     local top = isTop(biome)
     if top then
-        -- the one way off the top: over the wall's edge, then a moment falling out of its zone
+
         local route = {flat(from), topDrop(from)}
         table.insert(options, {route = route, top = true, length = routeLength(route), stay = 0.5})
     end
@@ -824,8 +754,6 @@ local function escapePlan(from, biome, floorY, hold)
     return best.margin > settings.guardMargin, best
 end
 
--- up on the wall: which end to drop off, and whether the guard is far enough from it. dropping takes
--- about half a second inside its zone, then a couple of steps out of it
 local function dropPlan(biome, floorY)
     local area = guardZone(biome)
     local guards = (area and not guardsJailed()) and guardsNear(floorY) or {}
@@ -842,12 +770,9 @@ local function dropPlan(biome, floorY)
     return best.margin > settings.guardMargin + 2, best
 end
 
--- how far an egg is from the way out, on the shorter side
 local function escapeLength(pos)
     return math.min(routeLength(escapeRoute(pos, true)), routeLength(escapeRoute(pos, false)))
 end
-
--- eggs
 
 local function eggsIn(biome)
     local folder = workspace:FindFirstChild("SpawnedEggs")
@@ -855,7 +780,7 @@ local function eggsIn(biome)
     local list = {}
     local info = BIOMES[biome]
     if not folder or not info then return list end
-    -- measure the way out against that biome's own tower, then put the current one back
+
     local current = tower
     tower = towers[info.world] or towers.main
     local top = isTop(biome)
@@ -874,11 +799,8 @@ local function eggsIn(biome)
     return list
 end
 
--- biomes where the guard never gave an opening get a rest before the next try
 local biomeRest = {}
 
--- the best egg you can reach. with nights on, only eggs you can bring back before night falls;
--- the second return says whether night ruled anything out. `skip` is a set of egg models to leave out
 local function bestEgg(onlyBiome, anyTime, skipModels)
     local least = settings.betterOnly and worstOnBase() or -1
     local isNight, toNight = nightState()
@@ -891,14 +813,14 @@ local function bestEgg(onlyBiome, anyTime, skipModels)
             local tooLate = timeCheck and (isNight or trip + 4 > toNight)
             for _, e in ipairs(eggsIn(biome)) do
                 local skip = e.value <= least or (skipModels ~= nil and skipModels[e.model] == true)
-                -- far from the way out, a guard catches you from almost anywhere
+
                 if settings.waitForGuard and e.escape > settings.maxEscape then skip = true end
                 if not skip and tooLate then
                     skip = true
                     nightBlocked = true
                 end
                 if not skip then
-                    -- the further from the way out, the longer the guard usually takes to give an opening
+
                     e.trip = trip + (settings.waitForGuard and math.max(0, e.escape - 35) * 0.8 or 0)
                     if settings.pick == "Most cash per minute" then
                         e.score = e.value / trip
@@ -923,7 +845,6 @@ local function eggsOwned()
     return n
 end
 
--- why an egg got dropped, from what the game told us just before
 local lastStun, lastCaught = 0, 0
 local function dropReason()
     if os.clock() - lastStun < 6 then return "a guard caught you" end
@@ -934,8 +855,6 @@ end
 local function carrying()
     return plr:GetAttribute("CarryingEgg") ~= nil
 end
-
--- the treadmill
 
 local function onTreadmill()
     return Treadmill ~= nil and Treadmill.OnTreadmill == true
@@ -955,7 +874,6 @@ local function leaveTreadmill()
     end
 end
 
--- over to the other tower through the halloween portal, the way a player walks into it
 local function goToWorld(id, world)
     if currentWorld() == world then
         useWorld(world)
@@ -969,15 +887,14 @@ local function goToWorld(id, world)
     local trigger = model and model:FindFirstChild("Trigger")
     if not trigger then return false, "couldn't find the portal" end
     status(world == "halloween" and "walking into the halloween portal" or "walking back through the portal")
-    -- line up in front of it first (its OutPos marker): walking straight at it from the side runs
-    -- into the frame, and the jump that gets you unstuck lands you on the rocks around it
+
     local front = model:FindFirstChild("OutPos")
     if front and front:IsA("BasePart") then
         travel(id, front.Position, 3, 40)
     else
         travel(id, trigger.Position, 2, 40)
     end
-    -- then straight in, without jumping
+
     local t = os.clock()
     while running(id) and currentWorld() ~= world and os.clock() - t < 12 do
         local c, _, r = getChar()
@@ -987,12 +904,11 @@ local function goToWorld(id, world)
     stopMoving()
     if currentWorld() ~= world then return false, "the portal didn't take you through" end
     useWorld(world)
-    -- the first trip plays a cutscene; give the arrival a moment
+
     task.wait(1.5)
     return true
 end
 
--- stands on your treadmill until `done` says to stop
 local function train(id, done)
     local part = treadmillPart()
     if not part then return false, "no treadmill yet" end
@@ -1017,8 +933,6 @@ local function train(id, done)
     end
     return true
 end
-
--- climbing
 
 local function faceWall(r)
     local n = Vector3.new(tower.nx, 0, 0)
@@ -1067,7 +981,7 @@ local function climbTo(id, height)
         else
             offWallSince = nil
         end
-        -- the start boost carries you the first stretch; time the climb after it
+
         if not measureFrom and y > tower.pad.Y + (staminaUpgradeConfig.ClimbBoostHeight or 125) + 10 then
             measureFrom, measureAt = y, os.clock()
         end
@@ -1086,7 +1000,6 @@ local function climbTo(id, height)
     return false, "stopped"
 end
 
--- shuffle sideways off the end of the wall and drop onto the island's platform
 local function stepOff(id, floorY)
     for _, dir in ipairs({1, -1}) do
         local started = os.clock()
@@ -1114,7 +1027,6 @@ local function stepOff(id, floorY)
     return false
 end
 
--- at the top of the ladder keep climbing, and the game lifts you over its edge onto the island
 local function climbOver(id, floorY)
     local started = os.clock()
     while running(id) do
@@ -1134,7 +1046,6 @@ local function climbOver(id, floorY)
     return false
 end
 
--- a walk on an island; brushing the wall makes you grab it, so let go and try again
 local function islandWalk(id, point, floorY, radius, limit)
     for _ = 1, 3 do
         local okw, why = walkTo(id, point, radius, limit)
@@ -1153,17 +1064,16 @@ local function islandWalk(id, point, floorY, radius, limit)
     return false, "kept grabbing the wall"
 end
 
--- off the island into the shaft in front of the wall; that drop is what counts as bringing it back
 local function dropDown(id, floorY, low)
     local side = sidePoints(low)
     local c, _, r = getChar()
     local drop = side.shaft
     if c and topFloor(floorY) then
-        -- the top island: across the field to the wall, then over its edge
+
         drop = topDrop(r.Position)
         islandWalk(id, Vector3.new(tower.wallX - tower.nx * 3, 0, drop.Z), floorY, 2.5, 15)
     else
-        -- from the egg field go round the wall's end first; from the platform go straight to the drop
+
         if c and tower.nx * (r.Position.X - tower.wallX) < 0 then
             islandWalk(id, side.corner, floorY, 2.5, 12)
         end
@@ -1194,11 +1104,9 @@ local function dropDown(id, floorY, low)
     return false, "stopped"
 end
 
--- a trip has to start from the lobby. if something left you up on the wall or an island, let go of
--- the wall, or walk off the island down the shaft
 local function getDown(id)
     useWorld(currentWorld())
-    -- the island you're standing on, if any (lobbies aren't flat, so height alone doesn't say)
+
     local function islandFloor(y)
         local nearestY
         for biome, info in pairs(BIOMES) do
@@ -1233,8 +1141,6 @@ local function getDown(id)
     return islandFloor(r.Position.Y) == nil, "stuck up on an island"
 end
 
--- run for the back of the wall, climb out of the guard's reach, hang there until it's wandered off
--- from one end, then shuffle off that end and out. any step that fails falls back to running for it
 local function wallEscape(id, biome, floorY, plan)
     local n = Vector3.new(tower.nx, 0, 0)
     local function faceBack(r)
@@ -1269,7 +1175,7 @@ local function wallEscape(id, biome, floorY, plan)
     end
     stopMoving()
     if not carrying() then return false, "lost it before getting up the wall" end
-    -- hang on until one end is clear. night drops eggs, so come down before it whatever happens
+
     local deadline = os.clock() + 90
     local choice
     while running(id) do
@@ -1284,7 +1190,7 @@ local function wallEscape(id, biome, floorY, plan)
         hold(0, 0)
         task.wait(0.15)
     end
-    -- off the chosen end: facing the wall from behind, your right is +Z when the wall faces +X
+
     local low = choice == nil or choice.low
     local dir = (low and -1 or 1) * tower.nx
     t = os.clock()
@@ -1322,8 +1228,6 @@ local function grab(egg)
     return false, "the prompt didn't take"
 end
 
--- stands by the egg until the guard is far enough off that you get away, then takes it.
--- "got" plus the escape plan, or "taken", "timeout", "night", "stop"
 local function waitAndGrab(id, target, biome, floorY, deadline)
     local hold = (tonumber(target.prompt.HoldDuration) or 0.5) + 0.25
     local fall = math.sqrt(2 * math.max(floorY - tower.pad.Y, 0) / workspace.Gravity)
@@ -1347,7 +1251,6 @@ local function waitAndGrab(id, target, biome, floorY, deadline)
     return "stop"
 end
 
--- one round trip for one egg
 local function trip(id, egg)
     local biome = egg.biome
     local floorY = floorOf(biome)
@@ -1385,13 +1288,12 @@ local function trip(id, egg)
     local deadline = os.clock() + settings.guardWait
     local before, plan, result = eggsOwned(), nil, nil
     while running(id) do
-        -- someone may have taken it on the way up
+
         if not target or not target.model.Parent or not target.prompt.Enabled then
             target = bestEgg(biome, true, tried)
             if not target then break end
         end
-        -- stand on the way-out side of the egg, as far off as the prompt still reaches, so the run
-        -- starts a few studs closer
+
         local exitLow = routeLength(escapeRoute(target.pos, true)) <= routeLength(escapeRoute(target.pos, false))
         local toward = flat((top and topDrop(target.pos) or sidePoints(exitLow).corner) - target.pos)
         local spot = toward.Magnitude > 0.1 and (flat(target.pos) + toward.Unit * 5) or target.pos
@@ -1410,7 +1312,7 @@ local function trip(id, egg)
             target = nil
         end
     end
-    -- before leaving empty handed, take any egg up here the guard is nowhere near right now
+
     if result == "timeout" and running(id) then
         local least = settings.betterOnly and worstOnBase() or -1
         local spare
@@ -1458,7 +1360,7 @@ local function trip(id, egg)
         end
         return false, why
     end
-    -- the game claims it once you're standing in the lobby
+
     local t = os.clock()
     while carrying() and os.clock() - t < 6 do task.wait(0.1) end
     task.wait(0.5)
@@ -1475,11 +1377,6 @@ local function trip(id, egg)
     return false, "egg lost"
 end
 
--- halloween candy: the event's monsters drop it when you knock them out with the Bat, and the
--- server hands it over as you walk past where it landed. Pumpkin Abyss is the lowest event island
--- and its pumpkins the weakest, so that's where this goes. it never swings with another player
--- close by, since the bat knocks players about too
-
 local CANDY_ISLAND = "Pumpkin Abyss"
 local BAT_REACH = 5
 
@@ -1495,7 +1392,6 @@ local function putAwayBat()
     if h and c and c:FindFirstChild("Bat") then pcall(function() h:UnequipTools() end) end
 end
 
--- where a monster is right now: the server walks them in straight lines and says from where to where
 local function monsterPos(m, serverNow)
     local from, to = m:GetAttribute("MoveFrom"), m:GetAttribute("MoveTo")
     local duration = tonumber(m:GetAttribute("MoveDuration")) or 0
@@ -1544,7 +1440,6 @@ local function playerNear(pos, radius)
     return false
 end
 
--- hits monsters on the candy island until `done` says to stop
 local function farmCandy(id, done)
     if not halloweenOpen() then return false, "the event portal is closed" end
     if not BIOMES[CANDY_ISLAND] then return false, "couldn't find " .. CANDY_ISLAND end
@@ -1598,7 +1493,7 @@ local function farmCandy(id, done)
             status("waiting for a monster (" .. short(candy) .. " candy)")
         else
             status(string.format("hitting a %s (%s candy)", tostring(monster:GetAttribute("MonsterName") or monster.Name), short(candy)))
-            -- walk in until close, then stand and swing
+
             if gap > 2.5 then steer(pos - r.Position) else stopMoving() end
             if gap <= BAT_REACH and os.clock() >= nextSwing and not playerNear(r.Position, 10) then
                 local bat = batTool()
@@ -1618,7 +1513,7 @@ end
 
 local function buyCandyEggs()
     while alive and settings.candyEggs and (tonumber(data("Candy")) or 0) >= 250 do
-        -- the shop answers with whether it worked
+
         local ok, err = call("HalloweenShopService", "BuyCandyEgg")
         if ok ~= true then
             log("couldn't buy a candy egg" .. (err and (": " .. tostring(err)) or ""))
@@ -1630,10 +1525,6 @@ local function buyCandyEggs()
     end
 end
 
--- the farm itself
-
--- the egg to go for right now, or nil and why not. training stops on the same answer, so the two
--- can never disagree and bounce back and forth
 local function nextEgg()
     if settings.trainOnly then return nil, "training only" end
     local egg, nightBlocked = bestEgg()
@@ -1656,7 +1547,7 @@ local function farmLoop(id)
             status("away from both towers (a boss fight?), waiting")
             task.wait(2)
         elseif carrying() then
-            -- still holding one from a trip that got cut short
+
             useWorld(worldAt(r.Position))
             if r.Position.Y < tower.pad.Y + 30 then
                 status("waiting for the egg to be claimed")
@@ -1696,7 +1587,7 @@ local function farmLoop(id)
                         task.wait(1)
                     end
                 elseif settings.idle == "Train on the treadmill" and treadmillPart() then
-                    -- candy farming leaves you up on an island
+
                     if not onTreadmill() then getDown(id) end
                     trained = train(id, eggReady)
                 end
@@ -1706,7 +1597,7 @@ local function farmLoop(id)
                 end
             end
         end
-        -- every pass gives the game at least a frame, whatever happened above
+
         RunService.Heartbeat:Wait()
     end
     stopMoving()
@@ -1733,8 +1624,6 @@ local function setFarm(on)
         log("auto farm off")
     end
 end
-
--- base upkeep: placing, hatching, equipping and selling, each on its own switch
 
 local spotRefused = {}
 local placePause = 0
@@ -1869,8 +1758,6 @@ local function sellSpare()
     end
 end
 
--- spending: the cheapest upgrade you can afford first, keeping the reserve you set
-
 local buyCooldown = {}
 
 local function upgradeOptions()
@@ -1942,7 +1829,7 @@ end
 
 local function tryRebirth()
     if os.clock() < rebirthPause or not rebirthReady() then return end
-    -- false = the normal rebirth. true is the robux skip, which this never asks for
+
     local res, err = call("RebirthService", "Request", false)
     if res and res.Status then
         stats.rebirths = stats.rebirths + 1
@@ -1952,8 +1839,6 @@ local function tryRebirth()
         log("couldn't rebirth: " .. reasonOf(res, err))
     end
 end
-
--- free rewards
 
 local lastDaily, lastIndex = -1e9, -1e9
 local function claimRewards()
@@ -1984,8 +1869,6 @@ local function claimRewards()
     end
 end
 
--- background jobs, each on its own switch
-
 task.spawn(function()
     while alive do
         pcall(function()
@@ -2011,8 +1894,6 @@ task.spawn(function()
         task.wait(2)
     end
 end)
-
--- signals: speed multipliers to click, and what tells us an egg got dropped
 
 if svc.TreadmillService and svc.TreadmillService.ShowMultiplier then
     pcall(function()
@@ -2049,8 +1930,6 @@ connect(plr.Idled, function()
     end)
 end)
 
--- ui
-
 elevate()
 
 local function shutdown()
@@ -2063,7 +1942,7 @@ local function shutdown()
     if genv.__CFAE_FARM and genv.__CFAE_FARM.Settings == settings then genv.__CFAE_FARM = nil end
 end
 
-local window = BPUI:CreateWindow({Version = "1.4.0", 
+local window = BPUI:CreateWindow({Version = "1.4.0",
     Title = "Climb Eggs", Subtitle = "Climb For Animals Eggs",
     Icon = "egg", Theme = "Void", ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true,
     ConfigFolder = "CatnClimbEggs", Watermark = false, CloseBehavior = "Hide",
@@ -2073,7 +1952,7 @@ local window = BPUI:CreateWindow({Version = "1.4.0",
 genv.__CFAE_FARM = {
     Farm = farm, Settings = settings, Stats = stats, Log = logLines,
     SetFarm = setFarm,
-    -- for checking the guard maths from outside
+
     Debug = {EscapePlan = escapePlan, EggsIn = eggsIn, FloorOf = floorOf, NextEgg = nextEgg, IsTop = isTop, Reachable = reachable},
     Destroy = function()
         shutdown()
@@ -2194,8 +2073,6 @@ logSec:AddButton({Name = "Copy the whole log", ButtonText = "Copy", Callback = f
     end
 end})
 
--- labels
-
 local function minutes(s)
     s = math.floor(s)
     if s < 60 then return s .. "s" end
@@ -2207,7 +2084,7 @@ task.spawn(function()
     local shownLog = -1
     while alive do
         pcall(function()
-            -- work everything out first (that reads game data), then write the labels
+
             local text = {}
             text.status = farm.enabled and farm.status or "off"
             text.session = string.format("this session: %d eggs, %d lost, %d hatched, %d bought, %d rebirths, %d candy, %d candy eggs, %s",

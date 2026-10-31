@@ -1,16 +1,17 @@
-# Catn Hub
+# catn hub
 
-One loader for every supported game. Paste this into your executor:
+loader:
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/catn_hub.lua"))()
 ```
 
-The hub works out which game you're in and downloads only that game's script.
+it checks what game you're in and only grabs that game's script
 
-| Game | File |
-|---|---|
-| Anime Battle Arena | `dist/games/aba.lua` |
-| Monday Morning Misery | `dist/games/mmm.lua` |
-| Climb For Animals Eggs | `dist/games/cfae.lua` |
-| Funky Friday | `dist/games/ff.lua` |
+games right now:
+- anime battle arena
+- monday morning misery
+- climb for animals eggs
+- funky friday
+
+right ctrl opens the hub. found a bug? tell me in the discord

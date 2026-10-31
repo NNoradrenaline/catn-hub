@@ -1,9 +1,3 @@
--- funky friday autoplay
--- the game runs all of its code inside an Actor (PlayerScripts.ClientActor), so the part that plays
--- runs in there too and talks to the menu over a comm channel. it presses lanes the same way the
--- game's touch buttons do (Field:HitLane), timed off each note's own song time instead of the screen,
--- so it keeps playing with roblox in the background
-
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local Players = game:GetService("Players")
@@ -18,12 +12,10 @@ end
 
 local BPUI = ...
 
-
--- the player inside the game's actor. kept as source because run_on_actor takes a string
 local WORKER = [==[
 local id = ...
 local ch = get_comm_channel(id)
--- errors in here never reach the console, so they're sent to the menu instead
+
 local started, startErr = pcall(function()
 local RunService = game:GetService("RunService")
 local env = getgenv and getgenv() or _G
@@ -37,11 +29,11 @@ local alive = true
 local presses, status = 0, "off"
 local plans = setmetatable({}, {__mode = "k"})
 local planVer = 0
--- lanes we're holding down: until a song time for a hold note, until a clock time for a tap
+
 local held = {}
 local lastField
 local song
--- when we pressed for each note, and how long the last frame took, so a miss can say why it happened
+
 local pressedAt = setmetatable({}, {__mode = "k"})
 local lastDt = 0
 local missLog = {}
@@ -60,7 +52,7 @@ local function framework()
     if not fw then
         fw = filtergc("table", {Keys = {"VSRG", "Configs"}}, true)
         if fw then
-            -- the game's own judgement for every note, used for the live numbers and the accuracy target
+
             pcall(function()
                 table.insert(conns, fw.EventAction:Bind("ScoreCalculated"):Connect(function(field, note, score, value, ms, acc)
                     if field ~= song.field then return end
@@ -101,7 +93,6 @@ local function currentAcc()
     return song.judged > 0 and song.acc / song.judged or 100
 end
 
--- per note: skip it, hit it off by a Good's worth, or on time with a little jitter. ms > 0 is late
 local function planFor(note)
     local p = plans[note]
     if p and p.ver == planVer then return p end
@@ -164,7 +155,7 @@ local function step(dt)
     local ignored = cfgs.IgnoredNoteTypes or {}
     local pb = g.AdjustedPlayback or 1
     local clock = os.clock()
-    -- the song time the game will judge a press at right now, worked out exactly the way Lane:Hit does
+
     local sample = g.TimePositionSample
     local now
     if sample and type(sample.Clock) == "number" then
@@ -175,7 +166,7 @@ local function step(dt)
     local hbo = 0
     pcall(function() hbo = (f.SettingsHandler:Get("HitboxOffset") or 0) / 1000 end)
     now = now + hbo
-    -- press half a frame early on average, so the error is centred on zero
+
     local lead = (math.min(dt, 0.05) * 0.5 + cfg.offsetMs / 1000) * pb
 
     for i, h in pairs(held) do
@@ -192,11 +183,11 @@ local function step(dt)
             for _, note in pairs(notes) do
                 local t = note.Time
                 local kind = note.NoteData and note.NoteData.Type
-                -- death, poison and mechanic notes are left alone: hitting them only costs you
+
                 if type(t) == "number" and not note.Hit and not note.Cleaned and not pressedAt[note]
                     and not (kind and table.find(ignored, kind)) then
                     local p = planFor(note)
-                    -- the game takes a press up to 200 ms late, so late notes are still worth pressing
+
                     if not p.skip and now + lead >= t + p.ms / 1000 * pb and now - t < 0.195 * pb then
                         due = due or {}
                         table.insert(due, note)
@@ -283,7 +274,6 @@ local function sendCfg()
     if channel then pcall(function() channel:Fire("cfg", table.clone(auto)) end) end
 end
 
--- a finished song goes in the log when the worker moves on from it
 local function logSong(s)
     if not s or (s.judged or 0) < 10 then return end
     table.insert(songLog, 1, string.format("%s  %.2f%%  %d misses  best combo %d", s.title or "?", s.acc or 0, s.misses or 0, s.best or 0))
@@ -325,9 +315,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
--- ui
-
-local window = BPUI:CreateWindow({Version = "1.0.2", 
+local window = BPUI:CreateWindow({Version = "1.0.2",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -390,7 +378,6 @@ ctl.jitter = human:AddSlider({Name = "Timing jitter", DependsOn = ctl.humanize, 
     Description = "Random error on normal hits. Anything under 50 ms still counts as Sick.",
     Callback = function(v) set("jitter", tonumber(v) or 0) end})
 
--- presets, the same idea as the mmm script: built-in ones plus your own, saved to a file
 local PRESET_FILE = "FFAutoplay/presets.json"
 local BUILT_IN = {
     {name = "Perfect", s = {offset = 0, humanize = false, aim = false}},
@@ -484,7 +471,6 @@ local logSec = tab:CreateSection("Song log")
 local logText = logSec:AddParagraph({Title = "Last songs", Content = "none yet"})
 local missText = logSec:AddParagraph({Title = "Misses this song", Content = "none"})
 
--- keep the worker alive: it's started again if the game's actor stops answering
 task.spawn(function()
     startWorker()
     while alive do

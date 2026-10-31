@@ -1,5 +1,3 @@
--- mmm autoplay
-
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local Players = game:GetService("Players")
@@ -19,7 +17,6 @@ end
 
 local BPUI = ...
 
-
 local function focused()
     if type(isrbxactive) ~= "function" then return true end
     local s, v = pcall(isrbxactive)
@@ -29,8 +26,6 @@ end
 local function strip(txt)
     return (tostring(txt or ""):gsub("<[^>]+>", ""):gsub("%s+", " "))
 end
-
--- keys / input
 
 local function actionName(lane) return lane .. "_FNF_Key" end
 
@@ -48,13 +43,11 @@ local function laneBinds(lane)
     return keys, info ~= nil and info.inputTypes ~= nil
 end
 
--- callfunction needs a real input object (keycode cant be Unknown), mouse movement works
 local inputObj
 local function grabInput(input)
     if input.KeyCode ~= Enum.KeyCode.Unknown then inputObj = input end
 end
 
--- backup if we dont have an input object yet. arrows come out as numpad so skip those
 local VK = {Space = 0x20, Semicolon = 0xBA, Quote = 0xDE, Comma = 0xBC, Period = 0xBE, Slash = 0xBF,
     LeftBracket = 0xDB, RightBracket = 0xDD, BackSlash = 0xDC, Minus = 0xBD, Equals = 0xBB}
 for i = 0, 25 do VK[string.char(65 + i)] = 0x41 + i end
@@ -63,9 +56,6 @@ for i, n in ipairs({"Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven
 end
 local hasKeypress = type(keypress) == "function" and type(keyrelease) == "function"
 
--- without an input object the script has to fall back to real key presses, and those go to whatever
--- window is focused, so nothing works while roblox is in the background. tapping F13 (a key nothing
--- uses) once while roblox is focused hands us an input object, and from then on it plays unfocused too
 local lastPrime = -math.huge
 local function primeInput()
     if inputObj or not hasKeypress or os.clock() - lastPrime < 2 or not focused() then return end
@@ -84,18 +74,14 @@ local function backupKey(lane)
     end
 end
 
--- autoplay
-
 local auto = {
     enabled = false, offsetMs = 0, presses = 0, status = "off", unbound = nil, method = "-",
     humanize = false, missChance = 2, goodChance = 10, jitter = 50, autoStart = false,
     aim = false, aimTarget = 96,
 }
 
--- what the game's stats line says right now: "Score: x | Misses: y | Accuracy: z% | Combo: w"
 local live = {misses = nil, acc = nil, title = ""}
 
--- hit windows from the game (sick .058, good .1), in lane units * notespeed
 local SICK, GOOD = 0.058, 0.1
 local planVer = 0
 local plans = setmetatable({}, {__mode = "k"})
@@ -124,14 +110,12 @@ local function toPixels(laneFrame, units)
     return (units + match.extra) * match.speed * laneFrame.AbsoluteSize.Y
 end
 
--- decide per note: skip it, hit it early (good) or on time with a bit of jitter
 local function getPlan(note, laneFrame)
     local p = plans[note]
     if p and p.ver == planVer then return p end
     p = {ver = planVer, px = 0}
     if auto.aim then
-        -- steer toward the target: play perfect while under it, take Goods while over it,
-        -- and drop the odd note when it's well over (Goods alone can't pull it down far enough)
+
         local acc = live.acc
         if acc and acc > auto.aimTarget + 1.5 and math.random() < 0.25 then
             p.skip, p.why = true, "skipped on purpose (accuracy target)"
@@ -165,8 +149,6 @@ table.insert(conns, uis.InputChanged:Connect(grabInput))
 
 local function midY(g) return g.AbsolutePosition.Y + g.AbsoluteSize.Y / 2 end
 
--- miss log. any note that goes past the line without being hit is noted with a reason, and each time
--- the game's miss count goes up the newest unclaimed reason is attached to that miss
 local MISS_FILE = "MMMAutoplay/misses.txt"
 local missLog = {entries = {}, events = {}, gui = nil, songStart = 0, lastMisses = 0, spikeAt = -math.huge, spikeMs = 0}
 local flagged = setmetatable({}, {__mode = "k"})
@@ -196,10 +178,10 @@ end
 
 local function trackMisses(now)
     if missLog.gui ~= arrowGui then
-        -- a new song: start counting from here
+
         missLog.gui, missLog.songStart, missLog.lastMisses, missLog.events = arrowGui, now, live.misses or 0, {}
     end
-    -- the title is blank when the song gui first appears, so read it at the time of the miss
+
     local t = arrowGui and arrowGui:FindFirstChild("Title")
     local title = t and (strip(t.Text):gsub("%s*%[[%d:]+%]%s*$", "")) or ""
     if title == "" then title = "?" end
@@ -218,7 +200,7 @@ local function trackMisses(now)
         if not why and now - (missLog.blockedAt or -math.huge) < 1.5 then
             why = "roblox wasn't focused and the script had no input object yet, so it couldn't press"
         elseif not why and now - missLog.spikeAt < 1.5 then
-            -- notes the script never saw go past: the game stalled and judged them all when it came back
+
             why = string.format("game froze for %d ms, notes went past before anything could press", missLog.spikeMs)
         end
         if why and now - (missLog.unfocusedAt or -math.huge) < 1.5 then why = why .. " (roblox was unfocused)" end
@@ -259,8 +241,6 @@ local function press(lane)
     return lane.down
 end
 
--- only look every half second, scanning the whole gui each frame lags a lot
--- once the script is obfuscated
 local arrowCache, arrowCheck = nil, 0
 local function findArrowGui()
     if arrowCache and arrowCache.Parent then return arrowCache end
@@ -270,7 +250,6 @@ local function findArrowGui()
     return arrowCache
 end
 
--- our side is whichever one isnt next to the opponent stats
 local function getSide(gui)
     local opp = gui:FindFirstChild("OpponentStats")
     local best, gap
@@ -285,7 +264,7 @@ local function getSide(gui)
 end
 
 local function step(dt)
-    -- remember the last long frame, so misses during a freeze can say so
+
     if dt > 0.1 then missLog.spikeAt, missLog.spikeMs = os.clock(), math.floor(dt * 1000 + 0.5) end
     if not auto.enabled then return end
     if not arrowGui or not arrowGui.Parent then
@@ -332,11 +311,9 @@ local function step(dt)
 
         if rec and lane then
             local line = midY(rec)
-            -- how far past the line a note can be and still get hit. after a lag spike a note can skip
-            -- past in one frame, so this reaches as far as the game's good window
+
             local window = math.max(rec.AbsoluteSize.Y * 0.35, toPixels(laneFrame, GOOD))
-            -- each press hits one note (the closest), so dense parts with two notes in the same lane
-            -- inside one frame need two presses, not one
+
             local pressCount = 0
 
             for _, note in ipairs(laneFrame:GetChildren()) do
@@ -344,13 +321,12 @@ local function step(dt)
                     local y = midY(note)
                     local prev = lastY[note]
                     lastY[note] = y
-                    -- notes get reused, if it jumped back up treat it as a new one
+
                     if prev and math.abs(y - prev) > rec.AbsoluteSize.Y * 2 then
                         prev, hit[note], plans[note], retried[note], flagged[note] = nil, nil, nil, nil, nil
                     end
                     local p = getPlan(note, laneFrame)
-                    -- the game moves a note away the moment a press hits it. if one we pressed for is still
-                    -- here a frame later, the press went to a neighbour in a tight cluster, so press once more
+
                     local again = hit[note] and not retried[note] and now - hit[note] > 0.025
                     if prev and dt > 0 and (not hit[note] or again) and not p.skip then
                         local vel = (y - prev) / dt
@@ -364,7 +340,7 @@ local function step(dt)
                             end
                         end
                     end
-                    -- a note past the hit window that's still here is about to be a miss. note down why
+
                     if prev and dt > 0 and not flagged[note] then
                         local vel = (y - prev) / dt
                         if math.abs(vel) > 5 and (line - y) * (vel > 0 and 1 or -1) <= -window then
@@ -385,7 +361,6 @@ local function step(dt)
                 end
             end
 
-            -- keep holding while a hold note tail is over the receptor
             local holdLane = holds and holds:FindFirstChild(name)
             if holdLane then
                 for _, piece in ipairs(holdLane:GetChildren()) do
@@ -418,8 +393,6 @@ table.insert(conns, RunService.RenderStepped:Connect(function(dt)
     end
 end))
 
--- auto start (real click, firesignal doesnt work here)
-
 local lastStart = 0
 local function autoStart()
     if not auto.autoStart or os.clock() - lastStart < 2 then return end
@@ -435,8 +408,6 @@ local function autoStart()
     task.wait(0.05)
     mouse1click()
 end
-
--- lobby stuff
 
 local LOBBY = {PlayerType = 2, AccessType = 1, MatchType = 3, AccuracyMode = 2, ModChartsEnabled = false}
 local lobby = {
@@ -461,7 +432,6 @@ end
 
 local function hiddenGuis() return rs.Assets:FindFirstChild("GUIs") end
 
--- 3 = selection, 6 = song select frame, 23 = countdown (skip just calls :Stop())
 local function songSelect()
     if not loadMods() then return end
     local fn = rawget(mods.class, "_StartSongSelect")
@@ -506,7 +476,7 @@ local function makeLobby()
     end
     local s, ev = pcall(function() return mods.noteGame:CreateMatch(table.clone(LOBBY)) end)
     if not s then lobby.status = "create failed: " .. tostring(ev) return end
-    -- hide the freeplay menu halfway through the transition like the game does
+
     pcall(function()
         ev:Connect(function(stage)
             if mods.effects and stage == mods.effects.BlackTransitionEvent.Halfway then
@@ -535,7 +505,7 @@ local function pickSong()
     if not open then answered = false return end
     if answered then return end
     local m, owner = myMatch()
-    if not m or not hasOpponent(m) then return end -- wait for someone to join
+    if not m or not hasOpponent(m) then return end
     local cat, song, diff = pickedSong()
     if not cat then lobby.status = "pick a valid song first" return end
     answered = true
@@ -546,7 +516,6 @@ local function pickSong()
     lobby.status = "picked " .. song .. " (" .. diff .. ")" .. (owner and "" or " as a vote")
 end
 
--- results screen is _ToResults upvalue 3, run the return button's handler to leave it
 local resultsAt, lastClose = nil, -math.huge
 local function closeResults()
     if not lobby.closeResults or type(getconnections) ~= "function" or not loadMods() then return end
@@ -581,13 +550,10 @@ local function lobbyTick()
     end
 end
 
--- song log
-
 local LOG_FILE = "MMMAutoplay/songs.txt"
 local songLog = {}
 local cur
 
--- results to discord through a webhook link the user pastes in
 local HttpService = game:GetService("HttpService")
 local hook = {url = "", on = false, status = "off"}
 
@@ -623,7 +589,6 @@ local function postResult(title, stats, judgements, why)
     return false
 end
 
--- one line per cause, for the misses of the song that just ended
 local function missSummary(title)
     local counts, order = {}, {}
     for _, line in ipairs(missLog.entries) do
@@ -671,9 +636,7 @@ local function watchSong()
     end
 end
 
--- ui
-
-local window = BPUI:CreateWindow({Version = "1.1.1", 
+local window = BPUI:CreateWindow({Version = "1.1.1",
     Title = "MMM Autoplay", Subtitle = "Monday Morning Misery",
     Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "MMMAutoplay",
@@ -705,7 +668,6 @@ local statusLbl = main:AddLabel({Text = "off", Style = "Sub"})
 local songLbl = main:AddLabel({Text = "song: -", Style = "Sub"})
 local statsLbl = main:AddLabel({Text = "-", Style = "Sub"})
 
--- the controls a preset sets, kept so presets can move them
 local ctl = {}
 
 local timing = tab:CreateSection("Timing")
@@ -733,8 +695,6 @@ ctl.jitter = human:AddSlider({Name = "Timing jitter", DependsOn = ctl.humanize, 
     Description = "Random error on normal hits, as a share of the Sick window, so they stay Sick.",
     Callback = function(v) auto.jitter = tonumber(v) or 0 changed() end})
 
--- presets: named sets of the settings above. yours are saved to a file, and any of them can be
--- copied as a short code to share
 local PRESET_FILE = "MMMAutoplay/presets.json"
 local BUILT_IN = {
     {name = "Perfect", s = {offset = 0, humanize = false, aim = false}},
@@ -910,7 +870,6 @@ local bindSec = tab:CreateSection("Your binds")
 local bindsLbl = bindSec:AddLabel({Text = "start a song to read them", Style = "Sub"})
 local inputLbl = bindSec:AddLabel({Text = "input: -", Style = "Sub"})
 
--- miss log tab
 local missTab = window:CreateTab({Name = "Miss log", Icon = "list"})
 local missSec = missTab:CreateSection("Misses")
 local missText = missSec:AddParagraph({Title = "Latest misses", Content = "none yet"})
@@ -928,7 +887,6 @@ missSec:AddButton({Name = "Clear", ButtonText = "Clear", Callback = function()
 end})
 missSec:AddLabel({Text = "each line: song, time into the song, miss number, lane, why. also saved to workspace/" .. MISS_FILE, Style = "Sub"})
 
--- discord tab
 local discordTab = window:CreateTab({Name = "Discord", Icon = "message-circle"})
 local hookSec = discordTab:CreateSection("Post results")
 hookSec:AddToggle({Name = "Post after each song", Default = false, Flag = "hook_on",
@@ -979,7 +937,7 @@ task.spawn(function()
         pcall(closeResults)
         pcall(lobbyTick)
         task.spawn(pcall, pickSong)
-        if not lobby.auto then pcall(autoStart) end -- never start alone while hosting
+        if not lobby.auto then pcall(autoStart) end
 
         pcall(function()
             logText:SetContent(#songLog > 0 and table.concat(songLog, "\n") or "none yet")
