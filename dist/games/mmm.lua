@@ -15,7 +15,7 @@ if genv.__MMM_AUTOPLAY and genv.__MMM_AUTOPLAY.Destroy then
     pcall(genv.__MMM_AUTOPLAY.Destroy)
 end
 
-local BPUI = ...
+local BPUI = ... or loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/ui.lua"))()
 
 local function focused()
     if type(isrbxactive) ~= "function" then return true end

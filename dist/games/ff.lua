@@ -10,7 +10,7 @@ if genv.__FF_AUTOPLAY and genv.__FF_AUTOPLAY.Destroy then
     pcall(genv.__FF_AUTOPLAY.Destroy)
 end
 
-local BPUI = ...
+local BPUI = ... or loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/ui.lua"))()
 
 local WORKER = [==[
 local id = ...

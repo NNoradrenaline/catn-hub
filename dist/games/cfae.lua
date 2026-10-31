@@ -13,7 +13,7 @@ if genv.__CFAE_FARM and genv.__CFAE_FARM.Destroy then
     pcall(genv.__CFAE_FARM.Destroy)
 end
 
-local BPUI = ...
+local BPUI = ... or loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/ui.lua"))()
 
 local src = rs:WaitForChild("src")
 local knit = require(src:WaitForChild("Packages"):WaitForChild("knit"))

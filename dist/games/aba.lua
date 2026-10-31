@@ -17,7 +17,7 @@ for _, key in ipairs({KEY, "__ABA_BLACK_FLASH_BPUI_V1", "__ABA_SPIRIT_GUN_ALL_TA
     if type(previous) == "table" and type(previous.Destroy) == "function" then pcall(previous.Destroy) end
 end
 
-local BPUI = ...
+local BPUI = ... or loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/ui.lua"))()
 
 local executor = "Unknown executor"
 if type(identifyexecutor) == "function" then
