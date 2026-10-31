@@ -1,4 +1,4 @@
--- catn hub 1.9.2 (anime battle arena 1.5.6, monday morning misery 1.1.1, climb for animals eggs 1.4.0, funky friday 1.0.2)
+-- catn hub 1.9.3 (anime battle arena 1.5.6, monday morning misery 1.1.1, climb for animals eggs 1.4.0, funky friday 1.0.2)
 -- built from vanta.lua, hub/bpui_compat.lua, hub/main.lua and the game scripts
 
 local Vanta = (function(...)
@@ -3127,7 +3127,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
     -- each game script has its own version, which the build passes in; the hub's is the fallback
-    local version = o.Version or "1.9.2"
+    local version = o.Version or "1.9.3"
     local v = Vanta:Window({
         Title = o.Title,
         -- version first, so a long game name gets cut off instead of the number
@@ -3165,12 +3165,13 @@ end)(Vanta)
 
 local BASE = "https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/"
 local LOADER = 'loadstring(game:HttpGet("' .. BASE .. 'catn_hub.lua"))()'
--- each game's script is downloaded the first time it's loaded
-local SOURCES = setmetatable({}, {__index = function(t, key)
-    local body = game:HttpGet(BASE .. "games/" .. key .. ".lua")
-    rawset(t, key, body)
-    return body
-end})
+-- each game's script is downloaded the first time it's loaded. a plain function, not a
+-- metatable: HttpGet yields, and roblox can't yield inside a metamethod
+local SOURCES = {}
+local function GET_SOURCE(key)
+    if not SOURCES[key] then SOURCES[key] = game:HttpGet(BASE .. "games/" .. key .. ".lua") end
+    return SOURCES[key]
+end
 
 print("[catn hub] starting")
 local hubOk, hubRes = xpcall(function()
@@ -3188,7 +3189,7 @@ local rs = game:GetService("ReplicatedStorage")
 local plr = Players.LocalPlayer
 
 -- the build fills this in from hub/release.json
-local HUB_VERSION = "1.9.2"
+local HUB_VERSION = "1.9.3"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -3304,7 +3305,7 @@ end
 -- loading and unloading the game scripts
 local function run(entry)
     -- in the one-file build the script is already here; in the split build this downloads it
-    local okSource, source = pcall(function() return SOURCES[entry.Key] end)
+    local okSource, source = pcall(GET_SOURCE, entry.Key)
     if not okSource or type(source) ~= "string" then
         win:Notify({Title = "Catn Hub", Content = "Couldn't get the " .. entry.Name .. " script: " .. tostring(source), Type = "Error", Duration = 8})
         return false
