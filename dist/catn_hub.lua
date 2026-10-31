@@ -1,4 +1,4 @@
--- catn hub 1.9.1 (anime battle arena 1.5.6, monday morning misery 1.1.1, climb for animals eggs 1.4.0, funky friday 1.0.2)
+-- catn hub 1.9.2 (anime battle arena 1.5.6, monday morning misery 1.1.1, climb for animals eggs 1.4.0, funky friday 1.0.2)
 -- built from vanta.lua, hub/bpui_compat.lua, hub/main.lua and the game scripts
 
 local Vanta = (function(...)
@@ -809,7 +809,7 @@ local function buildScene()
     shade({Size = UDim2.fromScale(0.2, 1)}, 0, 0.45)
     shade({AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromScale(0.2, 1)}, 180, 0.45)
 
-    S.moon = static(img("moon", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -250, 0, 290), Size = UDim2.fromOffset(210, 210)}), 0.05)
+    S.moon = static(img("moon", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -230, 0, 150), Size = UDim2.fromOffset(210, 210)}), 0.05)
 
     S.fog = {}
     for i, f in ipairs({{y = 40, h = 210, color = Color3.fromRGB(196, 176, 236), speed = 16, base = 0.55},
@@ -819,10 +819,10 @@ local function buildScene()
         table.insert(S.fog, {obj = o, y = f.y, speed = f.speed})
     end
 
-    -- everything up top starts below roblox's own top bar, so its buttons stay clear
-    local TOP, RIGHT = 58, 128
-    static(img("branch", {Position = UDim2.fromOffset(-30, TOP - 12), Size = UDim2.fromOffset(520, 184), ZIndex = 3}), 0)
-    local br = static(img("branch", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 34, 0, RIGHT + 26), Size = UDim2.fromOffset(430, 152), ZIndex = 3}), 0)
+    -- the top pieces hang from the very top edge of the screen
+    local TOP, RIGHT = 0, 0
+    static(img("branch", {Position = UDim2.fromOffset(-30, TOP - 18), Size = UDim2.fromOffset(520, 184), ZIndex = 3}), 0)
+    local br = static(img("branch", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 34, 0, RIGHT + 34), Size = UDim2.fromOffset(430, 152), ZIndex = 3}), 0)
     flip(br, "branch")
     static(img("web", {Position = UDim2.fromOffset(0, TOP), Size = UDim2.fromOffset(230, 230), ZIndex = 2}), 0.15)
     local wr = static(img("web", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, RIGHT), Size = UDim2.fromOffset(190, 190), ZIndex = 2}), 0.25)
@@ -1501,8 +1501,8 @@ function Vanta:Window(opts)
     self:_place()
     self.Scale.Scale = self:_scale() * 0.97
     self:_blur(self.BlurPref)
-    self:_fxSync()
     self:_dockBuild(opts)
+    self:_fxSync()
 
     if opts.Settings ~= false then
         task.defer(function() if not self.Destroyed then self:_settingsTab() end end)
@@ -3127,7 +3127,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
     -- each game script has its own version, which the build passes in; the hub's is the fallback
-    local version = o.Version or "1.9.1"
+    local version = o.Version or "1.9.2"
     local v = Vanta:Window({
         Title = o.Title,
         -- version first, so a long game name gets cut off instead of the number
@@ -3188,7 +3188,7 @@ local rs = game:GetService("ReplicatedStorage")
 local plr = Players.LocalPlayer
 
 -- the build fills this in from hub/release.json
-local HUB_VERSION = "1.9.1"
+local HUB_VERSION = "1.9.2"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
