@@ -1,4 +1,4 @@
--- catn hub v1.10.0
+-- catn hub v1.10.1
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -13,6 +13,15 @@ local unpack = table.unpack or unpack
 
 local Vanta = {Version = "2.2"}
 local U = {fast = false}
+
+local SH = (function()
+    local ok, env = pcall(function() return getgenv and getgenv() or _G end)
+    env = (ok and type(env) == "table") and env or _G
+    env.__VANTA_SHARED = env.__VANTA_SHARED or {}
+    return env.__VANTA_SHARED
+end)()
+SH.windows = SH.windows or {}
+U.windows = SH.windows
 
 local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
 
@@ -577,6 +586,7 @@ local NOTIFY = {
 function U.notify(win, opts)
     opts = opts or {}
     local T = win and win.T or U.defaultT
+    notifyGui, notifyHolder = SH.notifyGui, SH.notifyHolder
     if not notifyGui or not notifyGui.Parent then
         notifyGui = screenGui("VantaNotify", 200)
         notifyHolder = new("Frame", {
@@ -586,6 +596,7 @@ function U.notify(win, opts)
             Padding = UDim.new(0, 8), VerticalAlignment = Enum.VerticalAlignment.Bottom,
             HorizontalAlignment = Enum.HorizontalAlignment.Right, SortOrder = Enum.SortOrder.LayoutOrder,
         })})
+        SH.notifyGui, SH.notifyHolder = notifyGui, notifyHolder
     end
     local kind = NOTIFY[opts.Type or "Info"] or NOTIFY.Info
     local color = T[kind[2]] or T.SubText
@@ -762,7 +773,6 @@ function Window:SetTheme(name)
     self:_save()
 end
 
-local scene
 local SEASONS = {}
 
 local function sceneWanted()
@@ -1090,7 +1100,7 @@ local function buildScene(kind)
             if #(U.windows or {}) == 0 or S.retired then
                 S.conn:Disconnect()
                 gui:Destroy()
-                if scene == S then scene = nil end
+                if SH.scene == S then SH.scene = nil end
             end
             return
         end
@@ -1106,15 +1116,15 @@ end
 function U.sceneSync()
     local want = sceneWanted()
 
-    if scene and want and scene.kind ~= want then
-        scene.want, scene.retired = false, true
-        scene = nil
+    if SH.scene and want and SH.scene.kind ~= want then
+        SH.scene.want, SH.scene.retired = false, true
+        SH.scene = nil
     end
-    if want and not scene then
+    if want and not SH.scene then
         local ok, res = pcall(buildScene, want)
-        if ok then scene = res else warn("[vanta] scene: " .. tostring(res)) end
+        if ok then SH.scene = res else warn("[vanta] scene: " .. tostring(res)) end
     end
-    if scene then scene.want = want ~= nil end
+    if SH.scene then SH.scene.want = want ~= nil end
 end
 
 function Window:_fxStop() end
@@ -1146,14 +1156,14 @@ end
 
 function Window:_dockBuild(opts)
     self.DockOn = opts.Dock ~= false
-    if not U.hudBar or not U.hudBar.Parent then
+    if not SH.hudBar or not SH.hudBar.Parent then
         local hud = screenGui("VantaHud", 160)
-        U.hudBar = new("Frame", {BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10),
+        SH.hudBar = new("Frame", {BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10),
             Size = UDim2.fromOffset(0, 32), AutomaticSize = Enum.AutomaticSize.X, Parent = hud},
             {list(8, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Center)})
     end
     local btn = new("TextButton", {Name = self.Title, Text = "", AutoButtonColor = false, BackgroundColor3 = self.T.Panel, BackgroundTransparency = 0.15,
-        Size = UDim2.fromOffset(0, 32), AutomaticSize = Enum.AutomaticSize.X, Visible = self.DockOn, LayoutOrder = #U.windows, Parent = U.hudBar},
+        Size = UDim2.fromOffset(0, 32), AutomaticSize = Enum.AutomaticSize.X, Visible = self.DockOn, LayoutOrder = #U.windows, Parent = SH.hudBar},
         {corner(16), pad(9, 14, 0, 0), list(8, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)})
     self:bind(btn, "BackgroundColor3", "Panel")
     local edge = bstroke(self, btn, "Edge", 1, 0.86)
@@ -1818,7 +1828,7 @@ function Window:Destroy()
     task.delay(0.25, function() self.Gui:Destroy() end)
     if self.Dock and self.Dock.btn then
         self.Dock.btn:Destroy()
-        if U.hudBar and #U.hudBar:GetChildren() <= 1 then U.hudBar.Parent:Destroy() U.hudBar = nil end
+        if SH.hudBar and #SH.hudBar:GetChildren() <= 1 then SH.hudBar.Parent:Destroy() SH.hudBar = nil end
     end
     U.sceneSync()
 end
@@ -3214,7 +3224,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.10.0"
+    local version = o.Version or "1.10.1"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3270,7 +3280,7 @@ local HttpService = game:GetService("HttpService")
 local rs = game:GetService("ReplicatedStorage")
 local plr = Players.LocalPlayer
 
-local HUB_VERSION = "1.10.0"
+local HUB_VERSION = "1.10.1"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
