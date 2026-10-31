@@ -167,11 +167,18 @@ local function step(dt)
     pcall(function() hbo = (f.SettingsHandler:Get("HitboxOffset") or 0) / 1000 end)
     now = now + hbo
 
-    local lead = (math.min(dt, 0.05) * 0.5 + cfg.offsetMs / 1000) * pb
+    local function stamp(songT)
+        if not (sample and type(sample.Clock) == "number") then return clock end
+        local d = (songT - hbo - (sample.Position or 0)) / pb
+        return sample.Clock + math.clamp(d, -0.249, 0.249)
+    end
+
+    local lead = math.min(dt, 0.05) * pb
+    local nudge = cfg.offsetMs / 1000 * pb
 
     for i, h in pairs(held) do
-        if (h.song and now >= h.song) or (h.clock and clock >= h.clock) then
-            field:HitLane(i, false, clock)
+        if (h.song and now + lead >= h.song) or (h.clock and clock >= h.clock) then
+            field:HitLane(i, false, h.song and stamp(h.song) or clock)
             held[i] = nil
         end
     end
@@ -188,7 +195,7 @@ local function step(dt)
                     and not (kind and table.find(ignored, kind)) then
                     local p = planFor(note)
 
-                    if not p.skip and now + lead >= t + p.ms / 1000 * pb and now - t < 0.195 * pb then
+                    if not p.skip and now + lead >= t + p.ms / 1000 * pb - nudge and now - t < 0.195 * pb then
                         due = due or {}
                         table.insert(due, note)
                     end
@@ -197,13 +204,15 @@ local function step(dt)
             if due then
                 table.sort(due, function(a, b) return a.Time < b.Time end)
                 for _, note in ipairs(due) do
-                    if held[i] then field:HitLane(i, false, clock) end
-                    field:HitLane(i, true, clock)
+
+                    local at = note.Time + planFor(note).ms / 1000 * pb - nudge
+                    if held[i] then field:HitLane(i, false, stamp(at)) end
+                    field:HitLane(i, true, stamp(at))
                     pressedAt[note] = clock
                     presses = presses + 1
                     local len = tonumber(note.Length) or 0
                     if len > 0 then
-                        held[i] = {song = note.Time + len - 0.02}
+                        held[i] = {song = note.Time + len}
                     else
                         held[i] = {clock = clock + 0.03}
                     end
@@ -315,7 +324,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.0.2",
+local window = BPUI:CreateWindow({Version = "1.1.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",

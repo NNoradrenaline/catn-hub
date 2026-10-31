@@ -1,4 +1,4 @@
--- catn hub v1.10.1
+-- catn hub v1.10.2
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -3224,7 +3224,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.10.1"
+    local version = o.Version or "1.10.2"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3280,7 +3280,7 @@ local HttpService = game:GetService("HttpService")
 local rs = game:GetService("ReplicatedStorage")
 local plr = Players.LocalPlayer
 
-local HUB_VERSION = "1.10.1"
+local HUB_VERSION = "1.10.2"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -3313,7 +3313,7 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.0.2",
+        Version = "1.1.0",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
 }
