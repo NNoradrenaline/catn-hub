@@ -1,4 +1,4 @@
--- catn hub v1.10.2
+-- catn hub v1.12.0
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -22,6 +22,60 @@ local SH = (function()
 end)()
 SH.windows = SH.windows or {}
 U.windows = SH.windows
+
+local PART_fuzzy = (function()
+
+local M = {}
+
+local function wordStart(s, i)
+    if i == 1 then return true end
+    local prev = s:sub(i - 1, i - 1)
+    return prev:match("[%s%p]") ~= nil
+end
+
+function M.score(query, text)
+    if type(query) ~= "string" or type(text) ~= "string" then return nil end
+    local q, t = query:lower():gsub("^%s+", ""):gsub("%s+$", ""), text:lower()
+    if q == "" then return 0 end
+    local exact = t:find(q, 1, true)
+    if exact then
+        return 1000 - #t + (exact == 1 and 200 or 0) + (wordStart(t, exact) and 100 or 0)
+    end
+    local score, ti, last = 0, 1, nil
+    for qi = 1, #q do
+        local c = q:sub(qi, qi)
+        if c ~= " " then
+            local found = t:find(c, ti, true)
+            if not found then return nil end
+            score = score + 10
+            if wordStart(t, found) then score = score + 15 end
+            if last and found == last + 1 then score = score + 8 end
+            if last then score = score - math.min(found - last - 1, 10) end
+            last, ti = found, found + 1
+        end
+    end
+    return score - #t * 0.1
+end
+
+function M.rank(query, items, text, limit)
+    local scored = {}
+    for _, item in ipairs(items) do
+        local s = M.score(query, text(item))
+        if s then table.insert(scored, {item = item, s = s, len = #text(item)}) end
+    end
+    table.sort(scored, function(a, b)
+        if a.s ~= b.s then return a.s > b.s end
+        return a.len < b.len
+    end)
+    local out = {}
+    for i = 1, math.min(#scored, limit or #scored) do out[i] = scored[i].item end
+    return out
+end
+
+return M
+
+end)()
+local Fuzzy = PART_fuzzy
 
 local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
 
@@ -372,9 +426,11 @@ local ICONS = {
     ["chart-column"] = "rbxassetid://97915995538580",
     ["check"] = "rbxassetid://93898873302694",
     ["chevron-down"] = "rbxassetid://134243273101015",
+    ["circle"] = "rbxassetid://130359823580534",
     ["circle-check"] = "rbxassetid://85262178816537",
     ["circle-x"] = "rbxassetid://76821953846248",
     ["clock"] = "rbxassetid://121808839832144",
+    ["cloud"] = "rbxassetid://121226497050352",
     ["coins"] = "rbxassetid://116510979641930",
     ["crosshair"] = "rbxassetid://134242818164054",
     ["droplet"] = "rbxassetid://100597455015098",
@@ -385,6 +441,7 @@ local ICONS = {
     ["fish"] = "rbxassetid://124360663785796",
     ["flame"] = "rbxassetid://98218034436456",
     ["gamepad-2"] = "rbxassetid://92483947987410",
+    ["gauge"] = "rbxassetid://110273524101447",
     ["ghost"] = "rbxassetid://113822048130017",
     ["gift"] = "rbxassetid://109855212076373",
     ["hash"] = "rbxassetid://82890331678520",
@@ -404,6 +461,7 @@ local ICONS = {
     ["music"] = "rbxassetid://113343203848535",
     ["panel-left"] = "rbxassetid://97419752870313",
     ["play"] = "rbxassetid://135609604299893",
+    ["plug-zap"] = "rbxassetid://74506269884055",
     ["power"] = "rbxassetid://96479131758775",
     ["refresh-cw"] = "rbxassetid://138133190015277",
     ["search"] = "rbxassetid://121018724060431",
@@ -1364,9 +1422,11 @@ function Window:_flag(flag, get, set, save, load)
     return nil
 end
 
-function Window:_index(tab, name, desc, row, sec)
+function Window:_index(tab, name, desc, row, sec, kind)
     if not name or name == "" then return end
-    table.insert(self.Index, {name = tostring(name), desc = tostring(desc or ""), tab = tab, row = row, sec = sec})
+    local entry = {name = tostring(name), desc = tostring(desc or ""), tab = tab, row = row, sec = sec, kind = kind}
+    table.insert(self.Index, entry)
+    return entry
 end
 
 function Window:_flash(row)
@@ -1379,6 +1439,175 @@ function Window:_flash(row)
         tween(row, 0.5, {BackgroundTransparency = 1}).Completed:Connect(function()
             if row.Parent then row.BackgroundColor3 = self.T.Hover end
         end)
+    end)
+end
+
+local function paletteEntries()
+    local out = {}
+    for _, w in ipairs(U.windows or {}) do
+        if not w.Destroyed and type(w.Index) == "table" then
+            for _, e in ipairs(w.Index) do
+                if e.row and e.row.Parent and e.tab then table.insert(out, {w = w, e = e}) end
+            end
+        end
+    end
+    return out
+end
+
+local function paletteJump(w, e)
+    if not w.Open then w:SetOpen(true) end
+    w:Select(e.tab)
+    if e.sec and e.sec.Collapsed then e.sec:SetCollapsed(false) end
+    task.delay(0.45, function()
+        if w.Destroyed or not e.row.Parent then return end
+        local sc = e.tab.Scroll
+        local s = math.max(w.Scale.Scale, 0.01)
+        local y = (e.row.AbsolutePosition.Y - sc.AbsolutePosition.Y) / s + sc.CanvasPosition.Y - 24
+        tween(sc, 0.35, {CanvasPosition = Vector2.new(0, math.max(y, 0))})
+        w:_flash(e.row)
+    end)
+end
+
+function U.palette()
+    local P = SH.palette
+    if P and P.alive() then
+        if P.open then P.hide() else P.show() end
+        return
+    end
+    local w0
+    for _, w in ipairs(U.windows or {}) do
+        if not w.Destroyed then w0 = w break end
+    end
+    if not w0 then return end
+    local T = w0.T
+    local gui = screenGui("VantaSearch", 9990)
+    local dim = new("TextButton", {Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = gui})
+    local card = new("Frame", {BackgroundColor3 = T.Panel, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0.16, 0),
+        Size = UDim2.fromOffset(560, 0), AutomaticSize = Enum.AutomaticSize.Y, Parent = gui},
+        {corner(12), pad(10, 10, 10, 10), list(6), stroke(T.Stroke, 1, 0)})
+    local head = new("Frame", {BackgroundColor3 = T.Hover, Size = UDim2.new(1, 0, 0, 42), LayoutOrder = 1, Parent = card}, {corner(8)})
+    w0:icon(head, "search", 16, "Muted", {AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 13, 0.5, 0)})
+    local box = new("TextBox", {Text = "", PlaceholderText = "Search every setting in every window", ClearTextOnFocus = false,
+        BackgroundTransparency = 1, FontFace = F.Medium, TextSize = 15, TextColor3 = T.Text, PlaceholderColor3 = T.Muted,
+        TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(40, 0), Size = UDim2.new(1, -50, 1, 0), Parent = head})
+    local rows = new("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        LayoutOrder = 2, Parent = card}, {list(2)})
+    text({Text = "Enter runs it  ·  Shift+Enter shows it  ·  Up/Down to move  ·  Esc to close", TextSize = 11, TextColor3 = T.Muted,
+        TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 18), LayoutOrder = 3, Parent = card})
+
+    P = {open = false, sel = 1, items = {}}
+    SH.palette = P
+    function P.alive() return gui.Parent ~= nil and not w0.Destroyed end
+
+    local render
+    local function state(it)
+        if it.e.get then return it.e.get() and "On" or "Off" end
+        return it.e.kind or ""
+    end
+    render = function()
+        for _, c in ipairs(rows:GetChildren()) do
+            if c:IsA("GuiObject") then c:Destroy() end
+        end
+        for i, it in ipairs(P.items) do
+            local on = i == P.sel
+            local b = new("TextButton", {Text = "", AutoButtonColor = false, BackgroundColor3 = on and T.Accent or T.Hover,
+                BackgroundTransparency = on and 0.78 or 1, Size = UDim2.new(1, 0, 0, 40), LayoutOrder = i, Parent = rows}, {corner(7)})
+            it.w:icon(b, it.e.tab.IconName or "circle", 15, on and "Accent" or "Muted",
+                {AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0)})
+            text({Text = it.e.name, FontFace = F.Medium, TextSize = 13, TextColor3 = T.Text, Position = UDim2.fromOffset(38, 4),
+                Size = UDim2.new(1, -150, 0, 18), TextTruncate = Enum.TextTruncate.AtEnd, Parent = b})
+            text({Text = tostring(it.w.Title or "") .. "  >  " .. tostring(it.e.tab.Name), TextSize = 11, TextColor3 = T.Muted,
+                Position = UDim2.fromOffset(38, 21), Size = UDim2.new(1, -150, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = b})
+            local lit = it.e.get and it.e.get()
+            text({Text = state(it), TextSize = 11, TextColor3 = lit and T.Accent or T.Muted, TextXAlignment = Enum.TextXAlignment.Right,
+                AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(100, 16), Parent = b})
+            b.MouseEnter:Connect(function()
+                if P.sel ~= i then P.sel = i render() end
+            end)
+            b.MouseButton1Click:Connect(function() P.run(i, false) end)
+        end
+        if #P.items == 0 then
+            text({Text = box.Text == "" and "Start typing: a feature, a tab, a window" or "Nothing matches that", TextSize = 12,
+                TextColor3 = T.Muted, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 36), Parent = rows})
+        end
+    end
+
+    local function refresh()
+        local q = box.Text
+        local all = paletteEntries()
+        local function label(it) return it.e.name .. " " .. tostring(it.e.tab.Name) .. " " .. tostring(it.w.Title or "") end
+        if q:gsub("%s", "") == "" then
+            P.items = {}
+        elseif Fuzzy then
+            P.items = Fuzzy.rank(q, all, label, 8)
+        else
+            P.items = {}
+            local low = q:lower()
+            for _, it in ipairs(all) do
+                if #P.items < 8 and label(it):lower():find(low, 1, true) then table.insert(P.items, it) end
+            end
+        end
+        P.sel = 1
+        render()
+    end
+
+    function P.run(i, jump)
+        local it = P.items[i or P.sel]
+        if not it then return end
+        P.hide()
+        if it.w.Destroyed then return end
+        if not jump and it.e.act then
+            it.e.act()
+            local now = it.e.get and (it.e.get() and "on" or "off")
+            it.w:Notify({Title = it.e.name, Content = now and ("Turned " .. now .. ".") or "Done.", Type = "Success", Duration = 2})
+        else
+            paletteJump(it.w, it.e)
+        end
+    end
+    function P.move(d)
+        if #P.items == 0 then return end
+        P.sel = (P.sel - 1 + d) % #P.items + 1
+        render()
+    end
+    function P.show()
+        P.open = true
+        gui.Enabled = true
+        box.Text = ""
+        refresh()
+        dim.BackgroundTransparency = 1
+        tween(dim, 0.15, {BackgroundTransparency = 0.55})
+        task.defer(function() if P.open then box:CaptureFocus() end end)
+    end
+    function P.hide()
+        P.open = false
+        gui.Enabled = false
+        pcall(function() box:ReleaseFocus() end)
+    end
+    box:GetPropertyChangedSignal("Text"):Connect(refresh)
+    box.FocusLost:Connect(function(enter)
+        if enter and P.open then
+            local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+            P.run(P.sel, shift)
+        end
+    end)
+    dim.MouseButton1Click:Connect(function() P.hide() end)
+    P.show()
+end
+
+function U.bindPalette()
+    if SH.paletteConn then return end
+    SH.paletteConn = UserInputService.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        local k, P = input.KeyCode, SH.palette
+        local ctrl = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+        if k == Enum.KeyCode.K and ctrl then
+            U.palette()
+        elseif P and P.open then
+            if k == Enum.KeyCode.Escape then P.hide()
+            elseif k == Enum.KeyCode.Down then P.move(1)
+            elseif k == Enum.KeyCode.Up then P.move(-1) end
+        end
     end)
 end
 
@@ -1398,6 +1627,7 @@ function Vanta:Window(opts)
     self.Toggles = {}
     U.windows = U.windows or {}
     table.insert(U.windows, self)
+    pcall(U.bindPalette)
     self.Open, self.Destroyed, self.OrderCount = true, false, 0
     self.UserScale, self.BlurPref = 1, opts.Blur ~= false
     self.SideCollapsed = false
@@ -2301,7 +2531,8 @@ function Section:Button(opts)
     end)
     click.MouseButton1Up:Connect(function() tween(b, 0.12, {BackgroundTransparency = 0.12}) end)
     click.MouseButton1Click:Connect(function() safeCall(opts.Callback) end)
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    local entry = win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Button")
+    if entry then entry.act = function() safeCall(opts.Callback) end end
     local obj = {}
     function obj:SetName(t) title.Text = t end
     function obj:SetText(t) bl.Text = t end
@@ -2364,7 +2595,11 @@ function Section:Toggle(opts)
     end)
     f.MouseEnter:Connect(function() if not locked then tween(f, 0.1, {BackgroundTransparency = 0.45}) end end)
     f.MouseLeave:Connect(function() tween(f, 0.15, {BackgroundTransparency = locked and 0.5 or 1}) end)
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    local entry = win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Toggle")
+    if entry then
+        entry.get = function() return value end
+        entry.act = function() if not locked then obj:Set(not value) end end
+    end
     safeCall(opts.Callback, value)
     return obj
 end
@@ -2461,7 +2696,7 @@ function Section:Slider(opts)
     end)
     f.MouseEnter:Connect(function() tween(f, 0.1, {BackgroundTransparency = 0.45}) end)
     f.MouseLeave:Connect(function() tween(f, 0.15, {BackgroundTransparency = 1}) end)
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Slider")
     safeCall(opts.Callback, value)
     return obj
 end
@@ -2666,7 +2901,7 @@ function Section:Dropdown(opts)
     build()
     display()
     layout(true)
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Dropdown")
     if (multi and next(value)) or (not multi and value ~= nil) then fire() end
     return obj
 end
@@ -2709,7 +2944,7 @@ function Section:Input(opts)
     f.MouseLeave:Connect(function() tween(f, 0.15, {BackgroundTransparency = 1}) end)
     local saved = win:_flag(opts.Flag, function() return box.Text end, function(v) obj:Set(v) end)
     if type(saved) == "string" then box.Text = saved end
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Input")
     if box.Text ~= "" then safeCall(opts.Callback, box.Text, true) end
     return obj
 end
@@ -2790,7 +3025,7 @@ function Section:Keybind(opts)
     if saved == false then key = nil elseif saved then key = saved end
     bind.key = key
     btn.Text = keyName(key)
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Keybind")
     return obj
 end
 
@@ -2891,7 +3126,7 @@ function Section:ColorPicker(opts)
     local saved = win:_flag(opts.Flag, function() return color end, function(c) obj:Set(c) end, function() return toHex(color) end, fromHex)
     if saved then h, s, v = saved:ToHSV() end
     draw()
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    win:_index(self.Tab, opts.Name, opts.Desc, f, self, "ColorPicker")
     safeCall(opts.Callback, color)
     return obj
 end
@@ -2942,7 +3177,7 @@ function Section:Progress(opts)
         pct.Text = label or (math.floor(r * 100 + 0.5) .. "%")
     end
     obj:Set(opts.Default or 0)
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Progress")
     return obj
 end
 
@@ -2955,7 +3190,7 @@ function Section:Stat(opts)
     win:bind(val, "TextColor3", "Text")
     local obj = {}
     function obj:Set(t) val.Text = tostring(t) end
-    win:_index(self.Tab, opts.Name, opts.Desc, f, self)
+    win:_index(self.Tab, opts.Name, opts.Desc, f, self, "Stat")
     return obj
 end
 
@@ -3224,7 +3459,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.10.2"
+    local version = o.Version or "1.12.0"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3278,11 +3513,135 @@ local Lighting = game:GetService("Lighting")
 local MarketplaceService = game:GetService("MarketplaceService")
 local HttpService = game:GetService("HttpService")
 local rs = game:GetService("ReplicatedStorage")
+local GuiService = game:GetService("GuiService")
 local plr = Players.LocalPlayer
 
-local HUB_VERSION = "1.10.2"
+local PART_serverpick = (function()
+
+local M = {}
+
+local function open(s, jobId)
+    return type(s) == "table" and s.id ~= jobId and type(s.playing) == "number" and type(s.maxPlayers) == "number"
+        and s.playing < s.maxPlayers
+end
+
+function M.pick(list, jobId, mode, random)
+    local choices = {}
+    for _, s in ipairs(list or {}) do
+        if open(s, jobId) then table.insert(choices, s) end
+    end
+    if #choices == 0 then return nil end
+    random = random or math.random
+    if mode == "ping" then
+        local best
+        for _, s in ipairs(choices) do
+            local p = type(s.ping) == "number" and s.ping or math.huge
+            local bp = best and (type(best.ping) == "number" and best.ping or math.huge)
+            if not best or p < bp or (p == bp and s.playing < best.playing) then best = s end
+        end
+        return best
+    elseif mode == "few" then
+        local best
+        for _, s in ipairs(choices) do
+            if not best or s.playing < best.playing then best = s end
+        end
+        return best
+    elseif mode == "full" then
+        local best
+        for _, s in ipairs(choices) do
+            if not best or s.playing > best.playing then best = s end
+        end
+        return best
+    end
+    return choices[random(1, #choices)]
+end
+
+M.MODES = {
+    {"Lowest ping", "ping"},
+    {"Fewest players", "few"},
+    {"Most players", "full"},
+    {"Any server", "random"},
+}
+
+function M.modeKey(label)
+    for _, m in ipairs(M.MODES) do
+        if m[1] == label then return m[2] end
+    end
+    return "random"
+end
+
+return M
+
+end)()
+local PART_bus = (function()
+
+local M = {}
+local unpack = table.unpack or unpack
+
+function M.new()
+    local listeners = {}
+    local bus = {}
+
+    function bus.on(name, fn)
+        listeners[name] = listeners[name] or {}
+        local list = listeners[name]
+        table.insert(list, fn)
+        return function()
+            for i = #list, 1, -1 do
+                if list[i] == fn then table.remove(list, i) end
+            end
+        end
+    end
+
+    function bus.emit(name, data)
+        for _, fn in ipairs({unpack(listeners[name] or {})}) do pcall(fn, data) end
+        for _, fn in ipairs({unpack(listeners["*"] or {})}) do pcall(fn, name, data) end
+    end
+
+    function bus.clear()
+        listeners = {}
+    end
+
+    return bus
+end
+
+return M
+
+end)()
+local PART_version = (function()
+
+local M = {}
+
+function M.parse(v)
+    if type(v) ~= "string" then return nil end
+    local a, b, c = v:match("^%s*v?(%d+)%.(%d+)%.?(%d*)%s*$")
+    if not a then return nil end
+    return {tonumber(a), tonumber(b), tonumber(c) or 0}
+end
+
+function M.compare(a, b)
+    local x, y = M.parse(a), M.parse(b)
+    if not x or not y then return nil end
+    for i = 1, 3 do
+        if x[i] ~= y[i] then return x[i] < y[i] and -1 or 1 end
+    end
+    return 0
+end
+
+function M.outdated(mine, latest)
+    return M.compare(mine, latest) == -1
+end
+
+return M
+
+end)()
+local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
+
+local HUB_VERSION = "1.12.0"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
+
+local VERSION_URL = "https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/version.txt"
 
 local GAMES = {
     {
@@ -3293,10 +3652,23 @@ local GAMES = {
         Detect = function() return game.GameId == 578392296 or game.PlaceId == 1458767429 end,
     },
     {
+        Name = "Basically FNF: Remix",
+        Key = "bfnf",
+        Icon = "music",
+        Version = "1.0.0",
+        Detect = function()
+            if game.PlaceId == 6520999642 then return true end
+            local gui = plr:FindFirstChild("PlayerGui")
+            local m = gui and gui:FindFirstChild("Main")
+            local fm = m and m:FindFirstChild("FNFMain")
+            return fm ~= nil and fm:FindFirstChild("Modules") ~= nil and fm.Modules:FindFirstChild("songPlay") ~= nil
+        end,
+    },
+    {
         Name = "Monday Morning Misery",
         Key = "mmm",
         Icon = "music",
-        Version = "1.1.1",
+        Version = "1.1.2",
         Detect = function()
             local m = rs:FindFirstChild("Modules")
             return m ~= nil and m:FindFirstChild("Songs") ~= nil and m:FindFirstChild("CommonEffects") ~= nil
@@ -3313,13 +3685,16 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.1.0",
+        Version = "1.1.1",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
 }
 
 local genv = getgenv and getgenv() or _G
 if genv.__CATN_HUB and not genv.__CATN_HUB.Destroyed then pcall(function() genv.__CATN_HUB:Destroy() end) end
+
+local bus = Bus.new()
+genv.CatnBus = bus
 
 local afkConn
 local function antiAfk(on)
@@ -3493,27 +3868,33 @@ local function rejoin()
     end
 end
 
-local function serverHop()
+local hopMode = "random"
+local function serverHop(mode)
+    mode = mode or hopMode
     win:Notify({Title = "Server hop", Content = "Looking for another server.", Type = "Info", Duration = 3})
     task.spawn(function()
-        local data = getJson("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100&excludeFullGames=true")
-        local list = data and data.data
-        if type(list) ~= "table" then
+
+        local list, cursor = {}, nil
+        for _ = 1, 3 do
+            local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100&excludeFullGames=true"
+            if cursor then url = url .. "&cursor=" .. HttpService:UrlEncode(cursor) end
+            local data = getJson(url)
+            if type(data) ~= "table" or type(data.data) ~= "table" then break end
+            for _, s in ipairs(data.data) do table.insert(list, s) end
+            cursor = data.nextPageCursor
+            if mode == "random" or type(cursor) ~= "string" or cursor == "" then break end
+        end
+        if #list == 0 then
             win:Notify({Title = "Server hop", Content = "Couldn't get the server list. Try again in a moment.", Type = "Error"})
             return
         end
-        local choices = {}
-        for _, s in ipairs(list) do
-            if s.id ~= game.JobId and type(s.playing) == "number" and type(s.maxPlayers) == "number" and s.playing < s.maxPlayers - 1 then
-                table.insert(choices, s)
-            end
-        end
-        if #choices == 0 then
+        local pick = ServerPick.pick(list, game.JobId, mode)
+        if not pick then
             win:Notify({Title = "Server hop", Content = "No other open server found.", Type = "Warning"})
             return
         end
-        local pick = choices[math.random(1, #choices)]
-        win:Notify({Title = "Server hop", Content = "Joining a server with " .. tostring(pick.playing) .. " players.", Type = "Success", Duration = 4})
+        local detail = tostring(pick.playing) .. " players" .. (type(pick.ping) == "number" and (", " .. pick.ping .. " ms ping") or "")
+        win:Notify({Title = "Server hop", Content = "Joining a server with " .. detail .. ".", Type = "Success", Duration = 4})
         local ok, err = pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, pick.id, plr)
         if not ok then
             win:Notify({Title = "Server hop", Content = "Couldn't teleport: " .. tostring(err), Type = "Error", Duration = 8})
@@ -3580,6 +3961,35 @@ session:Button({Name = "Rejoin", Icon = "refresh-cw", Desc = "Leaves and comes s
     win:Dialog({Title = "Rejoin this server?", Content = "You'll leave the game and come straight back. Anything unsaved is lost.",
         Buttons = {{Text = "Cancel"}, {Text = "Rejoin", Style = "Primary", Callback = rejoin}}})
 end})
+session:Dropdown({Name = "Hop to", Icon = "gauge", Desc = "Which server Server hop picks",
+    Options = {"Lowest ping", "Fewest players", "Most players", "Any server"}, Default = "Any server", Flag = "hop_mode",
+    Callback = function(v) hopMode = ServerPick.modeKey(v) end})
+
+local reconnect = {on = false, busy = false}
+session:Toggle({Name = "Reconnect when disconnected", Icon = "plug-zap", Flag = "auto_reconnect",
+    Desc = "Rejoins by itself after a disconnect, with your scripts if Come back after a teleport is on",
+    Callback = function(v) reconnect.on = v == true end})
+local function onDisconnect(message)
+    if type(message) ~= "string" or message == "" then return end
+    bus.emit("disconnected", {text = message})
+    if not reconnect.on or reconnect.busy then return end
+    reconnect.busy = true
+    task.spawn(function()
+        for attempt = 1, 6 do
+            task.wait(attempt == 1 and 4 or 10)
+            if win.Destroyed then return end
+            pcall(TeleportService.Teleport, TeleportService, game.PlaceId, plr)
+        end
+        reconnect.busy = false
+    end)
+end
+pcall(function()
+    table.insert(win.Conns, GuiService.ErrorMessageChanged:Connect(function()
+        local ok, msg = pcall(function() return GuiService:GetErrorMessage() end)
+        onDisconnect(ok and msg or "Disconnected")
+    end))
+end)
+
 session:Button({Name = "Server hop", Icon = "shuffle", Desc = "Moves you to a different public server", ButtonText = "Hop", Callback = function()
     win:Dialog({Title = "Hop to another server?", Content = "You'll leave this server and join a different one.",
         Buttons = {{Text = "Cancel"}, {Text = "Hop", Style = "Primary", Callback = serverHop}}})
@@ -3598,6 +4008,24 @@ control:Keybind({Name = "Panic key", Icon = "siren", Desc = "Unloads every scrip
 
 local about = utils:Section("About")
 about:Stat({Name = "Version", Icon = "tag", Value = HUB_VERSION})
+local latestRow = about:Stat({Name = "Latest", Icon = "cloud", Value = "checking"})
+
+task.spawn(function()
+    local latest = getText(VERSION_URL .. "?t=" .. tostring(os.time()))
+    latest = latest and latest:match("^%s*(.-)%s*$")
+    if win.Destroyed then return end
+    if not Version.parse(latest) then
+        latestRow:Set("couldn't check")
+        return
+    end
+    latestRow:Set(latest)
+    if not Version.outdated(HUB_VERSION, latest) then return end
+    win:Dialog({
+        Title = "This hub is out of date",
+        Content = "You're on " .. HUB_VERSION .. ", the latest is " .. latest .. ". Old versions can break or miss fixes. Get the current loader in our Discord.",
+        Buttons = {{Text = "Later"}, {Text = "Open Discord", Style = "Primary", Callback = openDiscord}},
+    })
+end)
 about:Button({Name = "Place ID", Icon = "hash", ButtonText = "Copy", Callback = function() copyText(tostring(game.PlaceId), "Place ID") end})
 about:Button({Name = "Server ID", Icon = "server", ButtonText = "Copy", Callback = function() copyText(tostring(game.JobId), "Server ID") end})
 about:Button({Name = "Debug info", Icon = "bug", Desc = "Copies details to paste when you report a problem", ButtonText = "Copy", Callback = function()
@@ -3606,6 +4034,7 @@ end})
 
 win.CatnApi = {
     load = load, unloadAll = unloadAll, panic = panic, rejoin = rejoin, serverHop = serverHop, debugInfo = debugInfo, antiAfk = antiAfk,
+    bus = bus,
 }
 
 task.spawn(function()
@@ -3657,7 +4086,9 @@ task.spawn(function()
     else
         statusRow:Set("Not supported")
         result:SetTitle("This game isn't supported")
-        result:Set("We only have scripts for Anime Battle Arena and Monday Morning Misery. Join one of them and run the hub again. The Utilities tab still works here.")
+        local names = {}
+        for _, entry in ipairs(GAMES) do table.insert(names, entry.Name) end
+        result:Set("We have scripts for " .. table.concat(names, ", ") .. ". Join one of them and run the hub again. The Utilities tab still works here.")
         win:Notify({Title = "Not supported", Content = "No script for this game yet.", Type = "Warning"})
     end
 

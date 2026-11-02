@@ -287,6 +287,10 @@ local function logSong(s)
     if not s or (s.judged or 0) < 10 then return end
     table.insert(songLog, 1, string.format("%s  %.2f%%  %d misses  best combo %d", s.title or "?", s.acc or 0, s.misses or 0, s.best or 0))
     if #songLog > 8 then table.remove(songLog) end
+
+    local catnBus = getgenv and getgenv().CatnBus
+    if catnBus then pcall(catnBus.emit, "song_finished", {title = "Song finished", text = songLog[1], tags = "musical_note"}) end
+
 end
 
 local function startWorker()
@@ -324,7 +328,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.1.0",
+local window = BPUI:CreateWindow({Version = "1.1.1",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",

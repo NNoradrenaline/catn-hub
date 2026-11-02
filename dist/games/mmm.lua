@@ -613,6 +613,9 @@ local function saveSong()
         .. (cur.judgements ~= "" and ("  |  " .. cur.judgements) or "")
     table.insert(songLog, 1, line)
     if #songLog > 10 then table.remove(songLog) end
+
+    local catnBus = getgenv and getgenv().CatnBus
+    if catnBus then pcall(catnBus.emit, "song_finished", {title = "Song finished", text = cur.title .. "\n" .. cur.stats, tags = "musical_note"}) end
     if type(appendfile) == "function" and type(makefolder) == "function" then
         pcall(function()
             if type(isfolder) == "function" and not isfolder("MMMAutoplay") then makefolder("MMMAutoplay") end
@@ -636,7 +639,7 @@ local function watchSong()
     end
 end
 
-local window = BPUI:CreateWindow({Version = "1.1.1",
+local window = BPUI:CreateWindow({Version = "1.1.2",
     Title = "MMM Autoplay", Subtitle = "Monday Morning Misery",
     Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "MMMAutoplay",

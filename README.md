@@ -28,7 +28,12 @@ funky friday
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/games/ff.lua"))()
 ```
 
-right ctrl opens the hub, right shift opens a game's menu. found a bug? tell me in the discord
+basically fnf: remix
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/games/bfnf.lua"))()
+```
+
+right ctrl opens the hub, right shift opens a game's menu, ctrl+k searches every setting. found a bug? tell me in the discord
 
 ## use the ui in your own script
 
