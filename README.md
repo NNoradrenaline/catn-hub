@@ -32,6 +32,7 @@ basically fnf: remix
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/games/bfnf.lua"))()
 ```
+blockerman's minesweeper```lualoadstring(game:HttpGet("https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dist/games/mines.lua"))()```
 
 right ctrl opens the hub, right shift opens a game's menu, ctrl+k searches every setting. found a bug? tell me in the discord
 

@@ -1,4 +1,4 @@
--- catn hub v1.12.1
+-- catn hub v1.13.0
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -420,6 +420,7 @@ Vanta.MissingIcons = {}
 local ICONS = {
 
     ["bell"] = "rbxassetid://97392696311902",
+    ["bomb"] = "rbxassetid://139223800924636",
     ["bot"] = "rbxassetid://80451686744860",
     ["bug"] = "rbxassetid://83626408925438",
     ["cat"] = "rbxassetid://124252153404931",
@@ -439,6 +440,7 @@ local ICONS = {
     ["eye"] = "rbxassetid://100033680381365",
     ["eye-off"] = "rbxassetid://135928786788378",
     ["fish"] = "rbxassetid://124360663785796",
+    ["flag"] = "rbxassetid://78183383236196",
     ["flame"] = "rbxassetid://98218034436456",
     ["gamepad-2"] = "rbxassetid://92483947987410",
     ["gauge"] = "rbxassetid://110273524101447",
@@ -460,6 +462,7 @@ local ICONS = {
     ["mouse-pointer-2"] = "rbxassetid://117093892862228",
     ["music"] = "rbxassetid://113343203848535",
     ["panel-left"] = "rbxassetid://97419752870313",
+    ["percent"] = "rbxassetid://130155041032013",
     ["play"] = "rbxassetid://135609604299893",
     ["plug-zap"] = "rbxassetid://74506269884055",
     ["power"] = "rbxassetid://96479131758775",
@@ -837,6 +840,12 @@ local function sceneWanted()
     for _, w in ipairs(U.windows or {}) do
         if not w.Destroyed and w.Open and SEASONS[w.ThemeName] and w.SceneOn ~= false then return w.ThemeName end
     end
+
+    if U.motion ~= "Off" then
+        for _, w in ipairs(U.windows or {}) do
+            if not w.Destroyed and w.Open and w.SceneOn ~= false then return "Ambient" end
+        end
+    end
     return nil
 end
 
@@ -1119,9 +1128,129 @@ SEASONS.Christmas = {
     end,
 }
 
+local AMBIENT_TINTS = {
+    Obsidian = {shade = Color3.fromRGB(8, 8, 9), mist = Color3.fromRGB(168, 158, 144), a = Color3.fromRGB(236, 172, 108), b = Color3.fromRGB(142, 112, 226)},
+    Graphite = {shade = Color3.fromRGB(7, 7, 10), mist = Color3.fromRGB(150, 152, 170), a = Color3.fromRGB(112, 140, 240), b = Color3.fromRGB(196, 116, 214)},
+    Slate = {shade = Color3.fromRGB(6, 10, 18), mist = Color3.fromRGB(122, 146, 188), a = Color3.fromRGB(86, 150, 220), b = Color3.fromRGB(82, 196, 190)},
+    Warm = {shade = Color3.fromRGB(13, 9, 6), mist = Color3.fromRGB(190, 160, 128), a = Color3.fromRGB(232, 150, 84), b = Color3.fromRGB(206, 92, 96)},
+    Paper = {shade = Color3.fromRGB(240, 240, 244), mist = Color3.fromRGB(190, 190, 205), a = Color3.fromRGB(150, 170, 235), b = Color3.fromRGB(225, 170, 205)},
+}
+
+local function ambientWindow()
+    for _, w in ipairs(U.windows or {}) do
+        if not w.Destroyed and w.Open and w.SceneOn ~= false and not SEASONS[w.ThemeName] then return w end
+    end
+end
+
+local function ambientTint()
+    local w = ambientWindow()
+    local tint = AMBIENT_TINTS[w and w.ThemeName] or AMBIENT_TINTS.Obsidian
+
+    if w and w.AccentName ~= "Mono" and w.T and w.T.Accent then
+        return {shade = tint.shade, mist = tint.mist, a = w.T.Accent, b = tint.b}
+    end
+    return tint
+end
+
+local AMBIENT = {
+    shade = AMBIENT_TINTS.Obsidian.shade,
+    shadeLift = 0.3,
+    build = function(ctx)
+        local img, rng, shades = ctx.img, ctx.rng, ctx.shades
+        local cur = ambientTint()
+        cur = {shade = cur.shade, mist = cur.mist, a = cur.a, b = cur.b}
+
+        local pools = {}
+        for _, p in ipairs({{x = 0.12, y = 0.22, size = 760}, {x = 0.88, y = 0.3, size = 680}, {x = 0.2, y = 0.84, size = 860}, {x = 0.82, y = 0.8, size = 740}}) do
+            local o = img("glow", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(p.size, p.size), ZIndex = 1})
+            if o.Image == "" then o.Image = U.assets.Glow end
+            table.insert(pools, {obj = o, x = p.x, y = p.y, size = p.size, seed = rng:NextNumber(0, 500)})
+        end
+
+        local ribbons = {}
+        for _, r in ipairs({{y = 0.14, width = 1.5, height = 300, tilt = -9, seed = 41}, {y = 0.9, width = 1.6, height = 340, tilt = 7, seed = 83}}) do
+            local o = img("glow", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(r.width, 0, 0, r.height), ZIndex = 2})
+            if o.Image == "" then o.Image = U.assets.Glow end
+            table.insert(ribbons, {obj = o, y = r.y, height = r.height, width = r.width, tilt = r.tilt, seed = r.seed})
+        end
+
+        local fog = {}
+        for _, f in ipairs({{y = 60, h = 260, speed = 13, alpha = 0.46, seed = 3}, {y = 90, h = 190, speed = -8, alpha = 0.38, seed = 11}}) do
+            local o = img("fog", {AnchorPoint = Vector2.new(0, 1), Size = UDim2.new(1, 1500, 0, f.h), ScaleType = Enum.ScaleType.Tile,
+                TileSize = UDim2.fromOffset(740, f.h), ZIndex = 3})
+            table.insert(fog, {obj = o, y = f.y, speed = f.speed, alpha = f.alpha, seed = f.seed})
+        end
+
+        local motes = {}
+        for i = 1, 20 do
+            local size = rng:NextNumber(5, 15)
+            local o = img("glow", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(size, size), ZIndex = 4})
+            if o.Image == "" then o.Image = U.assets.Glow end
+
+            local side = i % 2 == 0 and rng:NextNumber(0.01, 0.3) or rng:NextNumber(0.7, 0.99)
+            table.insert(motes, {obj = o, x = side, y = rng:NextNumber(0, 1), speed = rng:NextNumber(0.012, 0.035), seed = rng:NextNumber(0, 500)})
+        end
+
+        return function(t, v, dt)
+
+            local want = ambientTint()
+            local k = math.min(dt * 2, 1)
+            for _, key in ipairs({"shade", "mist", "a", "b"}) do cur[key] = cur[key]:Lerp(want[key], k) end
+            for _, f in ipairs(shades) do f.BackgroundColor3 = cur.shade end
+
+            local calm = U.motion == "Reduced"
+            local pace = calm and 0.4 or 1
+
+            for _, p in ipairs(pools) do
+                local nx = math.noise(t * 0.07 * pace, p.seed)
+                local ny = math.noise(p.seed, t * 0.06 * pace)
+                local swell = math.noise(t * 0.11 * pace, p.seed, 4)
+                p.obj.Position = UDim2.fromScale(p.x + nx * 0.16, p.y + ny * 0.2)
+                local size = p.size * (1 + swell * 0.25)
+                p.obj.Size = UDim2.fromOffset(size, size)
+                p.obj.ImageColor3 = cur.a:Lerp(cur.b, math.clamp(0.5 + math.noise(t * 0.05 * pace, p.seed, 9), 0, 1))
+                p.obj.ImageTransparency = 1 - math.clamp(0.5 + swell * 0.25, 0.22, 0.72) * v
+            end
+
+            for _, r in ipairs(ribbons) do
+                local swell = math.noise(t * 0.09 * pace, r.seed)
+                r.obj.Position = UDim2.fromScale(0.5 + math.noise(r.seed, t * 0.05 * pace) * 0.2, r.y + swell * 0.05)
+                r.obj.Size = UDim2.new(r.width, 0, 0, r.height * (1 + swell * 0.4))
+                r.obj.Rotation = r.tilt + math.noise(t * 0.06 * pace, r.seed, 2) * 7
+                r.obj.ImageColor3 = cur.b:Lerp(cur.a, math.clamp(0.5 + math.noise(t * 0.07 * pace, r.seed, 5), 0, 1))
+                r.obj.ImageTransparency = 1 - math.clamp(0.44 + swell * 0.28, 0.14, 0.68) * v
+            end
+
+            for _, f in ipairs(fog) do
+                local swell = math.noise(t * 0.16 * pace, f.seed)
+                f.obj.Position = UDim2.new(0, -((t * f.speed * pace) % 740 + 740) % 740, 1, f.y + swell * 34)
+                f.obj.ImageColor3 = cur.mist
+                f.obj.ImageTransparency = 1 - math.clamp(f.alpha + swell * 0.1, 0.05, 0.5) * v
+            end
+
+            for _, m in ipairs(motes) do
+                m.obj.Visible = not calm
+                if not calm then
+                    m.y = m.y - m.speed * dt
+                    if m.y < -0.03 then m.y = 1.03 end
+                    local drift = math.noise(t * 0.25, m.seed) * 0.03
+                    m.obj.Position = UDim2.fromScale(m.x + drift, m.y)
+                    m.obj.ImageColor3 = cur.a:Lerp(cur.mist, 0.5)
+                    local twinkle = math.clamp(0.42 + math.noise(t * 0.9, m.seed) * 0.6, 0.05, 0.9)
+
+                    local edge = math.clamp(math.min(m.y, 1 - m.y) * 8, 0, 1)
+                    m.obj.ImageTransparency = 1 - twinkle * edge * v
+                end
+            end
+        end
+    end,
+}
+
+local SCENE_VERSION = 2
+
 local function buildScene(kind)
-    local season = SEASONS[kind]
-    local S = {kind = kind, want = false, vis = 0, t = 0, items = {}}
+    local season = kind == "Ambient" and AMBIENT or SEASONS[kind]
+    local S = {kind = kind, version = SCENE_VERSION, want = false, vis = 0, t = 0, items = {}}
     local gui = screenGui("VantaScene", 140)
     S.gui = gui
     local holder = new("Frame", {BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = gui})
@@ -1137,18 +1266,20 @@ local function buildScene(kind)
         return obj
     end
 
+    local shades = {}
     local function shade(props, rot, base)
         local f = new("Frame", {BackgroundColor3 = season.shade, BackgroundTransparency = 1, Parent = holder})
         for k, v in pairs(props) do f[k] = v end
         new("UIGradient", {Rotation = rot, Transparency = NumberSequence.new(0, 1), Parent = f})
-        static(f, base, "BackgroundTransparency")
+        static(f, math.min(base + (season.shadeLift or 0), 1), "BackgroundTransparency")
+        table.insert(shades, f)
     end
     shade({Size = UDim2.fromScale(1, 0.32)}, 90, 0.35)
     shade({AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.fromScale(1, 0.4)}, -90, 0.25)
     shade({Size = UDim2.fromScale(0.2, 1)}, 0, 0.45)
     shade({AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromScale(0.2, 1)}, 180, 0.45)
 
-    local update = season.build({img = img, static = static, holder = holder, rng = Random.new()})
+    local update = season.build({img = img, static = static, holder = holder, rng = Random.new(), shades = shades})
     local cam = workspace.CurrentCamera
 
     S.conn = RunService.RenderStepped:Connect(function(dt)
@@ -1174,7 +1305,7 @@ end
 function U.sceneSync()
     local want = sceneWanted()
 
-    if SH.scene and want and SH.scene.kind ~= want then
+    if SH.scene and want and (SH.scene.kind ~= want or SH.scene.version ~= SCENE_VERSION) then
         SH.scene.want, SH.scene.retired = false, true
         SH.scene = nil
     end
@@ -1630,6 +1761,7 @@ function Vanta:Window(opts)
     pcall(U.bindPalette)
     self.Open, self.Destroyed, self.OrderCount = true, false, 0
     self.UserScale, self.BlurPref = 1, opts.Blur ~= false
+    self.SceneOn = opts.Scene ~= false
     self.SideCollapsed = false
 
     self.ThemeName = seasonTheme() or (themeActive(opts.Theme) and opts.Theme or "Obsidian")
@@ -3326,6 +3458,7 @@ function Window:_settingsTab()
         Callback = function(v)
             if v ~= "Full" and v ~= "Reduced" and v ~= "Off" then return end
             U.motion, U.fast = v, v == "Off"
+            U.sceneSync()
             for _, w in ipairs(U.windows or {}) do
                 if w.PaintShimmer then pcall(w.PaintShimmer) end
             end
@@ -3333,12 +3466,11 @@ function Window:_settingsTab()
     local menu = tab:Section("Menu")
     menu:Toggle({Name = "Top bar", Desc = "The small bar at the top of the screen that opens and closes this window", Default = true, Flag = "vanta_dock",
         Callback = function(v) self.DockOn = v == true self:_dockSync() end})
-    if season then
-        local about = season == "Christmas" and "String lights, snow, baubles and presents around the window"
-            or "Bats, falling leaves, pumpkins and cobwebs around the window"
-        look:Toggle({Name = season .. " scene", Desc = about, Default = true, Flag = "vanta_scene",
-            Callback = function(v) self.SceneOn = v == true U.sceneSync() end})
-    end
+    local about = season == "Christmas" and "String lights, snow, baubles and presents around the window"
+        or season and "Bats, falling leaves, pumpkins and cobwebs around the window"
+        or "Slow fog, drifting colour and floating dust around the window"
+    look:Toggle({Name = season and (season .. " scene") or "Background scene", Desc = about, Default = self.SceneOn, Flag = "vanta_scene",
+        Callback = function(v) self.SceneOn = v == true U.sceneSync() end})
     menu:Toggle({Name = "Show what's on", Desc = "A small on-screen list of every switch that's on, with its key", Default = false, Flag = "vanta_active_list",
         Callback = function(v) self.ShowActive = v == true U.refreshActive() end})
     menu:Button({Name = "Reset window position", Desc = "Forgets where you dragged it and picks a free spot again", ButtonText = "Reset",
@@ -3459,7 +3591,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.12.1"
+    local version = o.Version or "1.13.0"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3472,6 +3604,7 @@ function BPUI:CreateWindow(o)
         end,
         Settings = o.ShowSettings ~= false,
         Size = o.Size,
+        Scene = o.Scene,
         Icon = "cat",
 
         Theme = Vanta.ThemeActive(o.Theme) and o.Theme or nil,
@@ -3637,7 +3770,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.12.1"
+local HUB_VERSION = "1.13.0"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -3687,6 +3820,13 @@ local GAMES = {
         Icon = "music",
         Version = "1.1.1",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
+    },
+    {
+        Name = "bLockerman's Minesweeper",
+        Key = "mines",
+        Icon = "bomb",
+        Version = "1.0.0",
+        Detect = function() return game.GameId == 3047037061 or game.PlaceId == 7871169780 end,
     },
 }
 
