@@ -1204,27 +1204,53 @@ do
         end
     end
 
-    local sprintPressedAt, runSpeed = 0, nil
-    local function setSprint(on)
-        local action = gameAction("Run")
-        if on ~= sprinting then
-            sprinting = on
-            sprintPressedAt = os.clock()
-            if action then pcall(function() action:Fire(on) end) end
-            return
-        end
-        if not on or not action then return end
-        local _, humanoid = Game.ownRoot()
-        if not humanoid or os.clock() - sprintPressedAt < 0.4 then return end
-        local speed = humanoid.WalkSpeed
-        runSpeed = math.max(runSpeed or 0, speed)
-        if speed < runSpeed * 0.85 then
-            sprintPressedAt = os.clock()
-            pcall(function()
-                action:Fire(false)
-                action:Fire(true)
+    local function gameSetting(key)
+        local ok, value = pcall(function()
+            local genv = type(getrenv) == "function" and getrenv() or nil
+            local g = genv and genv._G or _G
+            if key == "Platform" then return g.Platform end
+            return g.PlayerSettings and g.PlayerSettings[key]
+        end)
+        return ok and value or nil
+    end
+    local runOn, runHeld, lastRunPress = false, false, 0
+    do
+        local run = gameAction("Run")
+        if run then
+            connect(run.Pressed, function()
+                if gameSetting("SprintMode") == "Toggle" then runOn = not runOn else runOn = true end
+            end)
+            connect(run.Released, function()
+                if gameSetting("SprintMode") ~= "Toggle" then runOn = false end
             end)
         end
+
+        connect(player.CharacterAdded, function() runOn, runHeld = false, false end)
+    end
+    local function setSprint(on)
+        sprinting = on
+        local action = gameAction("Run")
+        if not action or gameSetting("Platform") == "Mobile" then return end
+
+        local _, humanoid = Game.ownRoot()
+        if on and humanoid and humanoid.WalkSpeed < 12 then return end
+        if gameSetting("SprintMode") == "Toggle" then
+            if runOn ~= on and os.clock() - lastRunPress > 1 then
+                lastRunPress = os.clock()
+                pcall(function()
+                    action:Fire(true)
+                    action:Fire(false)
+                end)
+            end
+        elseif on ~= runHeld then
+            runHeld = on
+            pcall(function() action:Fire(on) end)
+        end
+    end
+
+    local function sprintFor(dist)
+        if not bot.sprint then setSprint(false)
+        elseif dist > 9 then setSprint(true) end
     end
 
     local SINGLE_JUMP, DOUBLE_JUMP = 6, 13
@@ -1644,7 +1670,7 @@ do
 
                         path = nil
                         chaseStart = os.clock()
-                        setSprint(bot.sprint and dist > 6)
+                        sprintFor(dist)
                         if fightTarget ~= dummy.model then fightTarget, fightStart = dummy.model, os.clock() end
                         local patience = dummy.player and 8 or 4
                         if os.clock() - fightStart > patience and (damagedAt[dummy.model] or 0) < fightStart then
@@ -1705,7 +1731,7 @@ do
                                 path, pathTarget = nil, dummy
                                 failStreak = 0
                                 moveDir = dir
-                                setSprint(bot.sprint and dist > 6)
+                                sprintFor(dist)
                                 tryDash(rootPart, dummy.root.Position)
                                 bot.last = ("running to %s (%d studs)"):format(dummy.model.Name, dist)
                             else
@@ -1769,7 +1795,7 @@ do
                                             bot.last = "stopped short of a hazard, rerouting"
                                         else
                                             moveDir = dir
-                                            setSprint(bot.sprint and dist > 6)
+                                            sprintFor(dist)
                                             bot.last = ("running to %s (%d studs, around something)"):format(dummy.model.Name, dist)
                                         end
                                     end
@@ -3039,7 +3065,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.6.1",
+    return BPUI:CreateWindow({Version = "1.6.2",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
