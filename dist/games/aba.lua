@@ -1047,10 +1047,321 @@ do
     end)
 end
 
+local brain = {enabled = true, last = "learning", data = nil}
+state.Brain = brain
+do
+    local HttpService = game:GetService("HttpService")
+    local FILE = "BPHubABA/brain.json"
+    local dirty, savedAt = false, os.clock()
+
+    local function blank()
+        return {v = 1, fights = 0, moves = {}, styles = {}, trades = {}, players = {},
+            score = {learned = {n = 0, dealt = 0, taken = 0, secs = 0, kills = 0, deaths = 0},
+                plain = {n = 0, dealt = 0, taken = 0, secs = 0, kills = 0, deaths = 0}}}
+    end
+    brain.data = blank()
+    pcall(function()
+        if isfile(FILE) then
+            local data = HttpService:JSONDecode(readfile(FILE))
+            if type(data) == "table" and data.v == 1 then brain.data = data end
+        end
+    end)
+    for _, key in ipairs({"moves", "styles", "trades", "players"}) do brain.data[key] = brain.data[key] or {} end
+    brain.data.score = brain.data.score or blank().score
+
+    local function rate(sc)
+        if sc.n == 0 or sc.secs <= 0 then return nil end
+        return (sc.dealt - sc.taken + sc.kills * 60 - sc.deaths * 80) / sc.secs
+    end
+    brain.Rate = rate
+
+    local function trusted()
+        local sc = brain.data.score
+        local l, p = rate(sc.learned), rate(sc.plain)
+        if not l or not p or sc.learned.n < 15 or sc.plain.n < 6 then return true end
+        return l >= p - 0.5
+    end
+    brain.Trusted = trusted
+
+    function brain.Save()
+        dirty = false
+        savedAt = os.clock()
+        pcall(function()
+            if not isfolder("BPHubABA") then makefolder("BPHubABA") end
+            writefile(FILE, HttpService:JSONEncode(brain.data))
+        end)
+    end
+    function brain.Reset()
+        brain.data = blank()
+        brain.Save()
+    end
+    local function touch()
+        dirty = true
+        if os.clock() - savedAt > 20 then brain.Save() end
+    end
+    onCleanup(function() if dirty then brain.Save() end end)
+
+    local function myChar() return Game.characterName(player) end
+    local function charOf(model)
+        local owner = Players:GetPlayerFromCharacter(model)
+        if owner then return Game.characterName(owner) end
+        return "dummy"
+    end
+    local function entry(tbl, key, make)
+        local e = tbl[key]
+        if not e then e = make() tbl[key] = e end
+        return e
+    end
+
+    local function ucb(mean, n, total, c)
+        if n <= 0 then return math.huge end
+        return mean + (c or 1) * math.sqrt(math.log(math.max(total, 1) + 1) / n)
+    end
+
+    local casts = {}
+    function brain.MoveStats(name)
+        local mine = brain.data.moves[myChar()]
+        return mine and mine[name]
+    end
+
+    local plainFight = false
+    local function learning() return brain.enabled and not plainFight and trusted() end
+    function brain.PickMove(candidates, dist)
+        if not learning() or #candidates == 0 then return candidates[1] and candidates[1].index end
+        local mine = brain.data.moves[myChar()] or {}
+        local total = 0
+        for _, c in ipairs(candidates) do total = total + ((mine[c.name] and mine[c.name].n) or 0) end
+        local best, bestScore
+        for _, c in ipairs(candidates) do
+            local m = mine[c.name]
+            local ok = true
+            if m and m.hit >= 3 then
+                local range = m.range / m.hit
+                if dist > range + 4 then ok = false end
+            end
+            if ok then
+                local mean = m and m.n > 0 and (m.dmg / m.n) / 20 or 0
+                local score = ucb(mean, m and m.n or 0, total, 0.6)
+                if not bestScore or score > bestScore then best, bestScore = c, score end
+            end
+        end
+        return best and best.index
+    end
+    function brain.Cast(name, model, dist)
+        if not brain.enabled or not name then return end
+        local cast = {name = name, char = myChar(), at = os.clock(), model = model, dist = dist, dealt = 0}
+        casts[#casts + 1] = cast
+        task.delay(1.6, function()
+            local mine = entry(brain.data.moves, cast.char, function() return {} end)
+            local m = entry(mine, cast.name, function() return {n = 0, hit = 0, dmg = 0, range = 0} end)
+            m.n = m.n + 1
+            if cast.dealt > 0 then
+                m.hit = m.hit + 1
+                m.dmg = m.dmg + cast.dealt
+                m.range = m.range + cast.dist
+            end
+            for i, c in ipairs(casts) do if c == cast then table.remove(casts, i) break end end
+            touch()
+        end)
+    end
+
+    local STYLES = {"rush", "combo", "counter"}
+    local fight = nil
+    local watched = setmetatable({}, {__mode = "k"})
+
+    local function styleKey(enemy) return enemy end
+    function brain.ChooseStyle(enemy)
+        if not learning() then return "rush" end
+        local row = entry(brain.data.styles, styleKey(enemy), function() return {} end)
+
+        local rush = row.rush
+        local rushMean = rush and rush.n > 0 and rush.sum / rush.n or 0
+        if math.random() < 0.125 then
+            local least, leastN
+            for _, st in ipairs(STYLES) do
+                local n = row[st] and row[st].n or 0
+                if not leastN or n < leastN then least, leastN = st, n end
+            end
+            return least
+        end
+        local best, bestMean = "rush", rushMean
+        for _, st in ipairs(STYLES) do
+            local r = row[st]
+            if st ~= "rush" and r and r.n >= 4 and r.sum / r.n > bestMean + 0.15 then best, bestMean = st, r.sum / r.n end
+        end
+        do return best end
+        local total = 0
+        for _, st in ipairs(STYLES) do total = total + ((row[st] and row[st].n) or 0) end
+        local best, bestScore
+        for _, st in ipairs(STYLES) do
+            local r = row[st]
+
+            local score = ucb(r and r.n > 0 and r.sum / r.n or 0, r and r.n or 0, total, 0.5)
+            if st == "rush" and (not r or r.n == 0) then score = score + 1 end
+            if not bestScore or score > bestScore then best, bestScore = st, score end
+        end
+        return best or "rush"
+    end
+
+    local function closeFight(reason)
+        local f = fight
+        fight = nil
+        if not f then return end
+        local seconds = math.max(os.clock() - f.started, 1)
+
+        if f.dealt + f.taken < 5 and reason ~= "died" then return end
+        local sc = brain.data.score[f.plain and "plain" or "learned"]
+        sc.n, sc.dealt, sc.taken, sc.secs = sc.n + 1, sc.dealt + f.dealt, sc.taken + f.taken, sc.secs + seconds
+        if reason == "kill" then sc.kills = sc.kills + 1 end
+        if reason == "died" then sc.deaths = sc.deaths + 1 end
+        local reward = (f.dealt - f.taken) / math.max(seconds, 4) / 6
+        if reason == "kill" then reward = reward + 1 end
+        if reason == "died" then reward = reward - 1 end
+        reward = math.clamp(reward, -2, 2)
+        local row = entry(brain.data.styles, styleKey(f.enemy), function() return {} end)
+        local r = entry(row, f.style, function() return {n = 0, sum = 0} end)
+        r.n, r.sum = r.n + 1, r.sum + reward
+        brain.data.fights = (brain.data.fights or 0) + 1
+        if f.player then
+            local id = tostring(f.player.UserId)
+            local pr = entry(brain.data.players, id, function() return {name = f.player.Name, fights = 0, kills = 0, deaths = 0, dealt = 0, taken = 0} end)
+            pr.name = f.player.Name
+            pr.fights, pr.dealt, pr.taken = pr.fights + 1, pr.dealt + f.dealt, pr.taken + f.taken
+            if reason == "kill" then pr.kills = pr.kills + 1 end
+            if reason == "died" then pr.deaths = pr.deaths + 1 end
+        end
+        brain.last = ("%s vs %s: %s (%+.2f)"):format(f.style, f.enemy, reason, reward)
+        touch()
+    end
+
+    local function watchModel(model, humanoid)
+        if watched[model] then return end
+        watched[model] = true
+        local last = humanoid.Health
+        connect(humanoid.HealthChanged, function(hp)
+            local lost = last - hp
+            last = hp
+            if lost <= 0 then return end
+            if fight and fight.model == model then
+                fight.dealt = fight.dealt + lost
+                fight.lastHit = os.clock()
+                if hp <= 0 then closeFight("kill") end
+            end
+            for _, c in ipairs(casts) do
+                if c.model == model and os.clock() - c.at < 1.5 then c.dealt = c.dealt + lost end
+            end
+        end)
+    end
+
+    local mine = nil
+    local function watchMine()
+        local _, humanoid = Game.ownRoot()
+        if not humanoid or humanoid == mine then return end
+        mine = humanoid
+        local last = humanoid.Health
+        connect(humanoid.HealthChanged, function(hp)
+            local lost = last - hp
+            last = hp
+            if lost > 0 and fight then fight.taken = fight.taken + lost end
+            if hp <= 0 and fight then closeFight("died") end
+        end)
+    end
+
+    function brain.Fight(target)
+        if not brain.enabled then return "rush" end
+        watchMine()
+        if fight and fight.model ~= target.model then
+
+            closeFight("switched")
+        end
+        if not fight then
+            watchModel(target.model, target.humanoid)
+
+            plainFight = math.random() < 0.2
+            local enemy = charOf(target.model)
+            fight = {model = target.model, player = target.player, enemy = enemy, style = brain.ChooseStyle(enemy), plain = plainFight,
+                started = os.clock(), dealt = 0, taken = 0, lastHit = os.clock()}
+        end
+        return fight.style
+    end
+    function brain.EndFight() if fight then closeFight("left") end end
+    function brain.CurrentStyle() return fight and (fight.style .. (fight.plain and " (control)" or "")) or "-" end
+
+    function brain.Comparison()
+        local sc = brain.data.score
+        local l, p = rate(sc.learned), rate(sc.plain)
+        if not l or not p then return ("comparing: %d learned / %d control fights so far"):format(sc.learned.n, sc.plain.n) end
+        local base = math.max(math.abs(p), 1)
+        local pct = (l - p) / base * 100
+        local sure = (sc.learned.n >= 15 and sc.plain.n >= 6) and "" or " (early)"
+        return ("learned %+d%% vs control%s, %d/%d fights%s"):format(math.floor(pct + 0.5), sure,
+            sc.learned.n, sc.plain.n, trusted() and "" or " - behind, playing plain")
+    end
+
+    function brain.TradeChoice(enemy)
+        if not learning() then return "block" end
+        local row = entry(brain.data.trades, enemy, function() return {} end)
+
+        local b, w = row.block, row.swing
+        if math.random() < 0.15 then return (not w or (b and w.n < b.n)) and "swing" or "block" end
+        if w and w.n >= 4 and (not b or w.sum / w.n > (b.n > 0 and b.sum / b.n or 0) + 0.2) then return "swing" end
+        do return "block" end
+        local total = (row.block and row.block.n or 0) + (row.swing and row.swing.n or 0)
+        local best, bestScore
+        for _, choice in ipairs({"block", "swing"}) do
+            local r = row[choice]
+            local score = ucb(r and r.n > 0 and r.sum / r.n or 0, r and r.n or 0, total, 0.5)
+            if not bestScore or score > bestScore then best, bestScore = choice, score end
+        end
+        return best
+    end
+    function brain.TradeResult(enemy, choice, reward)
+        if not brain.enabled then return end
+        local row = entry(brain.data.trades, enemy, function() return {} end)
+        local r = entry(row, choice, function() return {n = 0, sum = 0} end)
+        r.n, r.sum = r.n + 1, r.sum + math.clamp(reward, -3, 3)
+        touch()
+    end
+    brain.CharOf = charOf
+
+    function brain.PlayerCost(targetPlayer)
+        if not learning() or not targetPlayer then return 0 end
+        local pr = brain.data.players[tostring(targetPlayer.UserId)]
+        if not pr or pr.fights < 2 then return 0 end
+        local edge = (pr.dealt - pr.taken) / math.max(pr.fights, 1) / 30 + (pr.kills - pr.deaths) * 0.5
+        return math.clamp(-edge * 10, -15, 30)
+    end
+
+    function brain.Summary()
+        local d = brain.data
+        local lines = {brain.Comparison()}
+        local mineMoves = d.moves[myChar()]
+        if mineMoves then
+            local best, bestRate
+            for name, m in pairs(mineMoves) do
+                if m.n >= 3 then
+                    local rate = m.hit / m.n
+                    if not bestRate or rate > bestRate then best, bestRate = name, rate end
+                end
+            end
+            if best then lines[#lines + 1] = ("best move as %s: %s (lands %d%%)"):format(myChar(), best, math.floor(bestRate * 100)) end
+        end
+        local nemesis, worst
+        for _, pr in pairs(d.players) do
+            if pr.fights >= 2 then
+                local edge = pr.kills - pr.deaths
+                if not worst or edge < worst then nemesis, worst = pr.name, edge end
+            end
+        end
+        if nemesis and worst < 0 then lines[#lines + 1] = "toughest: " .. nemesis end
+        return table.concat(lines, "  ·  ")
+    end
+end
+
 local bot = {enabled = false, sprint = true, dash = true, useMoves = true, reach = 10, last = "off", target = "none",
     dashes = 0, jumps = 0, targets = "Players", teamMode = "enemies", skipAfk = true, stick = true,
     lockCamera = true, aimMouse = false, targetPlayer = nil, awaken = true, smart = true, targetMode = "nearest", skipUlt = true,
-    trade = true, jumpOver = true, trades = 0, escapes = 0}
+    trade = true, jumpOver = true, trades = 0, escapes = 0, learn = true}
 state.Bot = bot
 do
     local PathfindingService = game:GetService("PathfindingService")
@@ -1159,7 +1470,7 @@ do
     end
 
     local function cost(dummy, from)
-        local distance = (dummy.root.Position - from).Magnitude
+        local distance = (dummy.root.Position - from).Magnitude + (bot.learn and brain.PlayerCost(dummy.player) or 0)
         if bot.targetMode == "nearest" then return distance end
         local speed = (dummy.root.AssemblyLinearVelocity * Vector3.new(1, 0, 1)).Magnitude
         local health = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
@@ -1364,10 +1675,21 @@ do
         if (look - rootPart.Position).Magnitude > 0.5 then rootPart.CFrame = CFrame.lookAt(rootPart.Position, look) end
     end
 
-    local function readyMove(blocking)
+    local function moveNameAt(index)
+        local playerGui = player:FindFirstChildOfClass("PlayerGui")
+        local button = playerGui and playerGui:FindFirstChild("HUD") and playerGui.HUD:FindFirstChild("Moves")
+            and playerGui.HUD.Moves:FindFirstChild(tostring(index))
+        return button and button:GetAttribute("MoveName") or ("Move" .. index)
+    end
+
+    local function readyMove(blocking, dist)
+        local candidates = {}
         for index = 1, 4 do
-            if Game.ownMoveReady(index) and (not blocking or guardBreaker(index)) then return index end
+            if Game.ownMoveReady(index) and (not blocking or guardBreaker(index)) then
+                candidates[#candidates + 1] = {index = index, name = moveNameAt(index)}
+            end
         end
+        return brain.PickMove(candidates, dist or 0)
     end
 
     local trade = {swingAt = -math.huge, model = nil, blockUntil = 0, hitsOnMe = {}, lastEscape = -math.huge,
@@ -1394,6 +1716,7 @@ do
             if hp < last and trade.model == model and os.clock() - lastSwing < 0.6 then
                 if os.clock() - trade.landedAt > 1 then trade.landed = 0 end
                 trade.landed = trade.landed + 1
+                trade.landedCount = (trade.landedCount or 0) + 1
                 trade.landedAt = os.clock()
                 if trade.landed >= 5 then
                     trade.landed = 0
@@ -1482,7 +1805,21 @@ do
                 return true
             end
         end
-        if since < 0.2 and trade.swingHit ~= 5 and dist <= M1_REACH + 2
+        local enemy = brain.CharOf(dummy.model)
+        local choice = (since < 0.2 and trade.swingHit ~= 5) and (trade.choiceFor == trade.swingAt and trade.choice or nil)
+        if since < 0.2 and trade.swingHit ~= 5 and not choice then
+            choice = brain.TradeChoice(enemy)
+            trade.choice, trade.choiceFor = choice, trade.swingAt
+
+            local landed0, taken0 = trade.landedCount or 0, #trade.hitsOnMe
+            local swingAt = trade.swingAt
+            task.delay(1, function()
+                local taken = 0
+                for _, t in ipairs(trade.hitsOnMe) do if t > swingAt then taken = taken + 1 end end
+                brain.TradeResult(enemy, choice, ((trade.landedCount or 0) - landed0) - taken)
+            end)
+        end
+        if since < 0.2 and trade.swingHit ~= 5 and choice == "block" and dist <= M1_REACH + 2
             and facingMe(dummy, rootPart) and blockAction
             and not (autoBlock.enabled and autoBlock.whileFarming) then
             trade.swingAt = -math.huge
@@ -1515,13 +1852,24 @@ do
             task.spawn(tapAction, "UseMode")
             return
         end
-        if bot.useMoves and dist <= bot.reach and os.clock() - lastMove > 1 then
-            local index = readyMove(blocking)
+        local style = brain.Fight(dummy)
+
+        local comboReady = os.clock() - trade.landedAt < 0.8 or dist > M1_REACH
+        if bot.useMoves and dist <= bot.reach and os.clock() - lastMove > 1 and (style ~= "combo" or comboReady) then
+            local index = readyMove(blocking, dist)
             if index then
                 lastMove = os.clock()
+                brain.Cast(moveNameAt(index), dummy.model, dist)
                 task.spawn(tapAction, "Move" .. index)
                 return
             end
+        end
+
+        if style == "counter" and os.clock() - trade.landedAt > 0.6 and os.clock() - trade.swingAt > 0.6 then
+            trade.idleSince = trade.idleSince or os.clock()
+            if os.clock() - trade.idleSince < 1.5 then return end
+        else
+            trade.idleSince = nil
         end
         if dist <= M1_REACH and not blocking and os.clock() - lastSwing > 0.28 then
             lastSwing = os.clock()
@@ -1625,6 +1973,7 @@ do
                 end
                 local dummy = keep and pathTarget or pickTarget(rootPart.Position)
                 if not dummy or failStreak >= 3 then
+                    brain.EndFight()
                     failStreak = 0
                     moveDir = Vector3.zero
                     bot.target = "none"
@@ -2181,7 +2530,7 @@ do
             if Game.isBlocking(subject.Character) then tags[#tags + 1] = "BLOCKING" end
             local skill = Game.usingSkill(subject.Character)
             if skill then tags[#tags + 1] = "using " .. skill end
-            subtitle.Text = table.concat(tags, "  |  ")
+            subtitle.Text = table.concat(tags, "  ·  ")
 
             local hp = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
             healthFill.Size = UDim2.fromScale(hp, 1)
@@ -3065,7 +3414,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.6.2",
+    return BPUI:CreateWindow({Version = "1.7.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -3095,14 +3444,14 @@ do
     ui.status = info:AddLabel({Text = supported and "ABA detected" or "Wrong game, features locked",
         Style = supported and "Success" or "Error"})
     ui.character = info:AddLabel({Text = "Character: -", Style = "Sub"})
-    ui.performance = info:AddLabel({Text = "FPS: -  |  ping: -", Style = "Sub"})
+    ui.performance = info:AddLabel({Text = "FPS: -  ·  ping: -", Style = "Sub"})
     ui.selfCheck = info:AddLabel({Text = "self check: running...", Style = "Sub"})
     info:AddButton({Name = "Unload", Callback = function() state.Destroy() end})
 
     local sessionSection = overviewTab:CreateSection("Session")
     ui.sessionTime = sessionSection:AddLabel({Text = "time: 0m", Style = "Sub"})
     ui.sessionGold = sessionSection:AddLabel({Text = "gold: +0", Style = "Sub"})
-    ui.sessionFights = sessionSection:AddLabel({Text = "kills: 0  |  deaths: 0  |  damage: 0", Style = "Sub"})
+    ui.sessionFights = sessionSection:AddLabel({Text = "kills: 0  ·  deaths: 0  ·  damage: 0", Style = "Sub"})
     ui.sessionRate = sessionSection:AddLabel({Text = "per hour: -", Style = "Sub"})
     sessionSection:AddButton({Name = "Reset session", Callback = session.Reset})
 
@@ -3112,7 +3461,7 @@ do
         ui.overview[key] = statusSection:AddLabel({Text = "-", Style = "Sub"})
     end
 
-    local keys = overviewTab:CreateSection("Default keys")
+    local keys = overviewTab:CreateSection("Default keys", {Collapsed = true})
     for _, line in ipairs({
         "RightShift  open/close menu", "End  turn everything off", "F2  auto block", "F3  Black Flash (any character)",
         "F4  ESP", "F5  target panel", "F6  Nanami auto hit", "F7  Yusuke gun sweep",
@@ -3186,6 +3535,16 @@ do
         Callback = function(value) bot.aimMouse = value == true end})
     if not canAimMouse then farmControls.aimMouse:Lock() end
 
+    local learn = farmTab:CreateSection("Learning")
+    farmControls.learn = learn:AddToggle({Name = "Learn from fights", Tag = "Experimental", Default = true, Flag = "bot_learn",
+        Description = "Keeps score of which moves land, which fight style works against each character, whether to block or trade, and who keeps beating you, then leans toward what works. Saved, so it keeps improving across servers.",
+        Callback = function(value) brain.enabled = value == true bot.learn = brain.enabled end})
+    ui.brain = learn:AddLabel({Text = "-", Style = "Sub"})
+    learn:AddButton({Name = "Forget what it learned", ButtonText = "Reset", Style = "Danger", Callback = function()
+        brain.Reset()
+        pcall(function() BPUI:Notify({Title = "Learning", Content = "Starting from scratch.", Duration = 3}) end)
+    end})
+
     local spawn = farmTab:CreateSection("Auto spawn")
     local spawnToggle = addToggle(spawn, {Name = "Auto spawn", Default = false, Flag = "spawn_enabled", Panic = false,
         Description = "Presses Play on the title screen and picks your character in the lobby, so a farm never sits on a menu after a hop or a death.",
@@ -3219,7 +3578,7 @@ do
     local BEST = {
         targets = "Players", team = "Enemies only", goAfter = "Whoever is nearest", skipAfk = true, skipUlt = true,
         moves = true, reach = 10, awaken = true, trade = true, smart = true,
-        sprint = true, dash = true, jump = true, lockCamera = true, aimMouse = false, hopAfter = 60,
+        sprint = true, dash = true, jump = true, lockCamera = true, aimMouse = false, hopAfter = 60, learn = true,
     }
     local function applyBest()
         for key, value in pairs(BEST) do
@@ -3231,7 +3590,7 @@ do
         applyBest()
         pcall(function() BPUI:Notify({Title = "Auto Farm", Content = "Farm settings set to what works best. Nothing was switched on.", Duration = 4}) end)
     end})
-    night:AddButton({Name = "Set up for overnight", ButtonText = "Turn on", Callback = function()
+    night:AddButton({Name = "Set up for overnight", ButtonText = "Turn on", Style = "Primary", Callback = function()
         applyBest()
         for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "noAfk", "hop", "skipJuggernaut", "bot"}) do
             local element = presetToggles[key]
@@ -3254,7 +3613,7 @@ do
     section:AddKeybind({Name = "Keybind", Default = Enum.KeyCode.F2, Mode = "Press", Flag = "auto_block_key",
         Callback = function() if alive then blockToggle:Set(not autoBlock.enabled) end end})
     ui.autoBlock = section:AddLabel({Text = "off", Style = "Sub"})
-    local tuning = defenseTab:CreateSection("Tuning")
+    local tuning = defenseTab:CreateSection("Tuning", {Collapsed = true})
     tuning:AddSlider({Name = "Range", Min = 6, Max = 30, Default = 14, Increment = 1, Suffix = " studs", Flag = "auto_block_range",
         Description = "How close an enemy's attack has to start. Moves count from twice as far.",
         Callback = function(value) autoBlock.range = tonumber(value) or 14 end})
@@ -3270,14 +3629,14 @@ do
     tuning:AddToggle({Name = "Let the 5th hit through", Default = false, Flag = "auto_block_finisher",
         Description = "Drops block for a chain's guard-breaking 5th hit so block isn't locked afterwards. About 22% less damage on the Attack Dummy.",
         Callback = function(value) autoBlock.letFinisher = value == true end})
-    local face = defenseTab:CreateSection("Face check")
+    local face = defenseTab:CreateSection("Face check", {Collapsed = true})
     local faceToggle = face:AddToggle({Name = "Only block attacks aimed at you", Default = true, Flag = "auto_block_face",
         Description = "Skips enemies swinging the other way.",
         Callback = function(value) autoBlock.faceCheck = value == true end})
     face:AddSlider({Name = "Facing angle", DependsOn = faceToggle, Min = 30, Max = 120, Default = 75, Increment = 5, Suffix = " deg",
         Flag = "auto_block_face_angle", Description = "How far off pointing at you they can be and still count.",
         Callback = function(value) autoBlock.faceAngle = tonumber(value) or 75 end})
-    local human = defenseTab:CreateSection("Look human")
+    local human = defenseTab:CreateSection("Look human", {Collapsed = true})
     human:AddSlider({Name = "Reaction delay", Min = 0, Max = 150, Default = 0, Increment = 10, Suffix = " ms", Flag = "auto_block_react",
         Description = "Waits a random part of this before blocking. M1s land about 210 ms after they start, so keep it low.",
         Callback = function(value) autoBlock.reactMs = tonumber(value) or 0 end})
@@ -3311,7 +3670,7 @@ do
     show:AddLabel({Text = "cooldowns: green = ready, orange = charging", Style = "Sub"})
     show:AddLabel({Text = "mode: purple = charging, gold = ready", Style = "Sub"})
 
-    local filters = visualsTab:CreateSection("Filters")
+    local filters = visualsTab:CreateSection("Filters", {Collapsed = true})
     filters:AddToggle({Name = "Hide teammates", Default = true, Flag = "esp_hide_team",
         Callback = function(value) esp.hideTeammates = value == true end})
     filters:AddToggle({Name = "Hide AFK", Default = true, Flag = "esp_hide_afk",
@@ -3321,7 +3680,7 @@ do
     filters:AddSlider({Name = "Max distance", Min = 100, Max = 5000, Default = 1500, Increment = 50, Suffix = " studs",
         Flag = "esp_max_distance", Callback = function(value) esp.maxDistance = tonumber(value) or 1500 end})
 
-    local colors = visualsTab:CreateSection("Colors")
+    local colors = visualsTab:CreateSection("Colors", {Collapsed = true})
     colors:AddToggle({Name = "Team colors", Default = true, Flag = "esp_team_colors",
         Callback = function(value) esp.teamColors = value == true end})
     colors:AddColorPicker({Name = "Enemy", Default = esp.enemyColor, Flag = "esp_enemy_color",
@@ -3339,7 +3698,7 @@ do
         Flag = "panel_range", Description = "How close an enemy has to be when you're not farming.",
         Callback = function(value) panel.range = tonumber(value) or 150 end})
 
-    local alertSection = visualsTab:CreateSection("Mode alerts")
+    local alertSection = visualsTab:CreateSection("Mode alerts", {Collapsed = true})
     addToggle(alertSection, {Name = "Enemy mode ready", Default = false, Flag = "alert_enemies",
         Callback = function(value) alerts.enemies = value == true end})
     alertSection:AddToggle({Name = "Only enemies", Default = true, Flag = "alert_enemies_only",
@@ -3371,7 +3730,7 @@ do
     ringSection:AddSlider({Name = "Opacity", Min = 0.1, Max = 1, Default = 0.55, Increment = 0.05, Flag = "comp_ring_opacity",
         Callback = function(value) comp.ringOpacity = tonumber(value) or 0.55 end})
 
-    local cds = compTab:CreateSection("Cooldown strips")
+    local cds = compTab:CreateSection("Cooldown strips", {Collapsed = true})
     cds:AddToggle({Name = "Focus target strip", Default = true, Flag = "comp_strips",
         Description = "Over the enemy you're looking at: one cell per move, seconds left once learned.",
         Callback = function(value) comp.strips = value == true end})
@@ -3395,7 +3754,7 @@ local playerCards = {}
 local function playerCardText(targetPlayer)
     local title = targetPlayer.DisplayName .. "  (" .. tostring(Game.characterName(targetPlayer)) .. ")"
     local mode = math.floor(Game.chargeFraction(targetPlayer) * 100 + 0.5)
-    local lines = {string.format("%s  |  %d kills, %d deaths  |  %d dmg  |  mode %s",
+    local lines = {string.format("%s  ·  %d kills, %d deaths  ·  %d dmg  ·  mode %s",
         targetPlayer.Team and targetPlayer.Team.Name or "no team",
         Game.stat(targetPlayer, "Kills"), Game.stat(targetPlayer, "Deaths"),
         math.floor(Game.stat(targetPlayer, "Damage") + 0.5), mode >= 100 and "READY" or (mode .. "%"))}
@@ -3559,11 +3918,11 @@ do
             krillin.enabled = value == true and correctGame and alive
             krillin.last = krillin.enabled and "waiting for kiblast" or "off"
         end})
-    local targets = charactersTab:CreateSection("Krillin: targets")
+    local targets = charactersTab:CreateSection("Krillin: targets", {Collapsed = true})
     teamDropdown(targets, "krillin_team", function(mode) krillin.teamMode = mode end)
     targets:AddToggle({Name = "Hit anyone if no enemies", Default = false, Flag = "krillin_fallback",
         Callback = function(value) krillin.fallback = value == true end})
-    local timingSection = charactersTab:CreateSection("Krillin: timing")
+    local timingSection = charactersTab:CreateSection("Krillin: timing", {Collapsed = true})
     timingSection:AddSlider({Name = "Volley gap", Min = 0.1, Max = 1, Default = 0.35, Increment = 0.05, Suffix = " s",
         Flag = "krillin_gap", Callback = function(value) krillin.volleyGap = tonumber(value) or 0.35 end})
     timingSection:AddSlider({Name = "Hold per part", Min = 0.1, Max = 0.8, Default = 0.4, Increment = 0.05, Suffix = " s",
@@ -3656,7 +4015,7 @@ do
     end})
     files:AddButton({Name = "Refresh the list", ButtonText = "Refresh", Callback = function() picker:Refresh(macro.List()) end})
 
-    local share = macroTab:CreateSection("Share")
+    local share = macroTab:CreateSection("Share", {Collapsed = true})
     share:AddButton({Name = "Copy as a code", ButtonText = "Copy", Callback = function()
         local text = macro.Export()
         if not text then say("record something first", "Warning") return end
@@ -3743,7 +4102,7 @@ do
         {"UseMode action", "Auto mode (G)", function() return find(player, "PlayerScripts", "BaseContext", "UseMode") ~= nil end, true},
     }
 
-    local checkSection = miscTab:CreateSection("Self check")
+    local checkSection = miscTab:CreateSection("Self check", {Collapsed = true})
     checkSection:AddLabel({Text = executor, Style = "Sub"})
     local summary = checkSection:AddLabel({Text = "checking...", Style = "Sub"})
     local rows = {}
@@ -3809,21 +4168,22 @@ local function onOff(value) return value and "on" or "off" end
 task.spawn(function()
     while alive do
         local ok, reason = pcall(function()
-            ui.status:Set(supported and ("ABA detected  |  " .. executor) or "Wrong game, features locked")
+            ui.status:Set(supported and ("ABA detected  ·  " .. executor) or "Wrong game, features locked")
             ui.character:Set("Character: " .. tostring(Game.characterName(player))
-                .. (player.Team and ("  |  Team: " .. player.Team.Name) or ""))
-            ui.performance:Set(string.format("FPS: %d  |  ping: %dms", math.floor(1 / math.max(timing.frame, 1e-3) + 0.5),
+                .. (player.Team and ("  ·  Team: " .. player.Team.Name) or ""))
+            ui.performance:Set(string.format("FPS: %d  ·  ping: %dms", math.floor(1 / math.max(timing.frame, 1e-3) + 0.5),
                 math.floor(samplePing() * 1000 + 0.5)))
 
             local minutes = math.floor((os.clock() - session.started) / 60)
             ui.sessionTime:Set(string.format("time: %dh %dm", math.floor(minutes / 60), minutes % 60))
             ui.sessionGold:Set("gold: +" .. math.floor(session.gold))
-            ui.sessionFights:Set(string.format("kills: %d  |  deaths: %d  |  damage: %d",
+            ui.sessionFights:Set(string.format("kills: %d  ·  deaths: %d  ·  damage: %d",
                 session.kills, session.deaths, math.floor(session.damage)))
             local hours = math.max((os.clock() - session.started) / 3600, 1 / 60)
-            ui.sessionRate:Set(string.format("per hour: %d kills  |  %d gold", math.floor(session.kills / hours),
+            ui.sessionRate:Set(string.format("per hour: %d kills  ·  %d gold", math.floor(session.kills / hours),
                 math.floor(session.gold / hours)))
             ui.hopStatus:Set(hop.last)
+            ui.brain:Set(brain.enabled and (brain.Summary() .. "  ·  now: " .. brain.CurrentStyle() .. "  ·  last: " .. brain.last) or "off")
 
             local lines = ui.overview
             lines.bot:Set("Auto Farm: " .. onOff(bot.enabled) .. (bot.enabled and ("  (" .. bot.target .. ")") or ""))
@@ -3836,23 +4196,23 @@ task.spawn(function()
             lines.yusuke:Set("Yusuke: gun sweep " .. onOff(yusuke.enabled))
             lines.krillin:Set("Krillin: kiblast " .. onOff(krillin.enabled))
 
-            ui.botStatus:Set(bot.enabled and (bot.last .. "  |  target: " .. bot.target) or "off")
+            ui.botStatus:Set(bot.enabled and (bot.last .. "  ·  target: " .. bot.target) or "off")
             ui.spawnStatus:Set(spawner.last)
-            ui.macro:Set(macro.last .. ((#macro.events > 0 and not macro.recording) and ("  |  " .. macro.Summary()) or ""))
+            ui.macro:Set(macro.last .. ((#macro.events > 0 and not macro.recording) and ("  ·  " .. macro.Summary()) or ""))
             ui.espStatus:Set(esp.enabled and (esp.shown .. " players shown") or "off")
             ui.compStatus:Set(comp.enabled and ("focus: " .. (comp.focus or "none")) or "off")
 
-            ui.anyBlackFlash:Set((anyBlackFlash.enabled and anyBlackFlash.last or "off") .. "  |  clicks: " .. anyBlackFlash.clicks)
-            ui.yujiBlackFlash:Set((yuji.blackFlash and yuji.blackFlashLast or "off") .. "  |  clicks: " .. yuji.blackFlashClicks)
-            ui.yujiDivergent:Set((yuji.divergent and yuji.divergentLast or "off") .. "  |  clicks: " .. yuji.divergentClicks)
-            ui.yujiSkull:Set((yuji.skull and yuji.skullLast or "off") .. "  |  clicks: " .. yuji.skullClicks)
-            ui.nanami:Set((nanami.enabled and nanami.last or "off") .. "  |  hits: " .. nanami.hits)
-            ui.kokushibo:Set((kokushibo.enabled and kokushibo.last or "off") .. "  |  hits: " .. kokushibo.hits)
-            ui.autoBlock:Set((autoBlock.enabled and autoBlock.last or "off") .. "  |  blocks: " .. autoBlock.blocks)
+            ui.anyBlackFlash:Set((anyBlackFlash.enabled and anyBlackFlash.last or "off") .. "  ·  clicks: " .. anyBlackFlash.clicks)
+            ui.yujiBlackFlash:Set((yuji.blackFlash and yuji.blackFlashLast or "off") .. "  ·  clicks: " .. yuji.blackFlashClicks)
+            ui.yujiDivergent:Set((yuji.divergent and yuji.divergentLast or "off") .. "  ·  clicks: " .. yuji.divergentClicks)
+            ui.yujiSkull:Set((yuji.skull and yuji.skullLast or "off") .. "  ·  clicks: " .. yuji.skullClicks)
+            ui.nanami:Set((nanami.enabled and nanami.last or "off") .. "  ·  hits: " .. nanami.hits)
+            ui.kokushibo:Set((kokushibo.enabled and kokushibo.last or "off") .. "  ·  hits: " .. kokushibo.hits)
+            ui.autoBlock:Set((autoBlock.enabled and autoBlock.last or "off") .. "  ·  blocks: " .. autoBlock.blocks)
             ui.rejoin:Set(rejoin.last)
-            ui.yusuke:Set((yusuke.enabled and yusuke.last or "off") .. "  |  shots: " .. yusuke.shots)
-            ui.krillin:Set((krillin.enabled and krillin.last or "off") .. "  |  volleys: " .. krillin.volleys)
-            ui.sweeps:Set((sweeps.enabled and sweeps.last or "off") .. "  |  casts: " .. sweeps.casts .. "  |  hits: " .. sweeps.hits)
+            ui.yusuke:Set((yusuke.enabled and yusuke.last or "off") .. "  ·  shots: " .. yusuke.shots)
+            ui.krillin:Set((krillin.enabled and krillin.last or "off") .. "  ·  volleys: " .. krillin.volleys)
+            ui.sweeps:Set((sweeps.enabled and sweeps.last or "off") .. "  ·  casts: " .. sweeps.casts .. "  ·  hits: " .. sweeps.hits)
 
             if tabOpen(playerInfoTab) then refreshPlayerInfo() end
         end)

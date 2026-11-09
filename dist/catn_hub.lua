@@ -1,4 +1,4 @@
--- catn hub v1.13.1
+-- catn hub v1.13.2
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -2483,7 +2483,7 @@ local function newAutoRow(sec)
     return f, body
 end
 
-local function labels(win, parent, name, desc, rightSpace, icon, top)
+local function labels(win, parent, name, desc, rightSpace, icon, top, tag)
     local left = 14
     if icon then
         local iy = type(top) == "number" and top or 20
@@ -2496,6 +2496,32 @@ local function labels(win, parent, name, desc, rightSpace, icon, top)
     local title = text({Text = name or "", FontFace = F.Medium, TextSize = 13, Size = UDim2.new(1, 0, 0, 17),
         TextTruncate = Enum.TextTruncate.AtEnd, LayoutOrder = 1, Parent = holder})
     win:bind(title, "TextColor3", "Text")
+
+    if tag then
+        local tagText = type(tag) == "table" and tag.Text or tostring(tag)
+        local tone = type(tag) == "table" and tag.Tone or "Warn"
+        local pill = new("Frame", {AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+            Size = UDim2.fromOffset(#tagText * 6 + 12, 15), BackgroundTransparency = 0.82, ZIndex = 3, Parent = title}, {corner(4)})
+        local pillText = text({Text = string.upper(tagText), FontFace = F.SemiBold, TextSize = 9,
+            TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), ZIndex = 4, Parent = pill})
+        local function paint()
+            local color = win.T[tone] or win.T.Accent
+            pill.BackgroundColor3, pillText.TextColor3 = color, color
+        end
+        paint()
+        table.insert(win.Redraws, paint)
+
+        local function place()
+            local s = math.max(win.Scale.Scale, 0.01)
+            local room = title.AbsoluteSize.X / s - pill.Size.X.Offset - 6
+            title.TextTruncate = Enum.TextTruncate.AtEnd
+            local w = math.min(title.TextBounds.X / s, room)
+            pill.Position = UDim2.new(0, math.max(w, 0) + 6, 0.5, 0)
+        end
+        title:GetPropertyChangedSignal("TextBounds"):Connect(place)
+        title:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
+        task.defer(place)
+    end
     if desc and desc ~= "" then win:_tip(parent, desc) end
     return holder, title, nil
 end
@@ -2626,7 +2652,7 @@ function Section:Button(opts)
     local click = new("TextButton", {Text = "", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 4, Parent = f})
     local label = opts.ButtonText or opts.Text or "Run"
     local w = math.max(54, #label * 7 + 24)
-    local holder, title = labels(win, f, opts.Name, opts.Desc, w + 4, opts.Icon)
+    local holder, title = labels(win, f, opts.Name, opts.Desc, w + 4, opts.Icon, nil, opts.Tag)
     autoHeight(win, f, holder, ROW_H)
 
     local b = new("Frame", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(w, 26), ZIndex = 2, Parent = f}, {corner(6)})
@@ -2676,7 +2702,7 @@ function Section:Toggle(opts)
     local locked = false
     local f = newRow(self, ROW_H)
     local btn = new("TextButton", {Text = "", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 4, Parent = f})
-    local holder = labels(win, f, opts.Name, opts.Desc, 46, opts.Icon)
+    local holder = labels(win, f, opts.Name, opts.Desc, 46, opts.Icon, nil, opts.Tag)
     autoHeight(win, f, holder, ROW_H)
 
     local box = new("Frame", {BackgroundColor3 = win.T.Hover, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
@@ -2745,7 +2771,7 @@ function Section:Slider(opts)
 
     local hasDesc = false
     local f = newRow(self, hasDesc and 66 or 54)
-    local holder = labels(win, f, opts.Name, opts.Desc, 80, opts.Icon)
+    local holder = labels(win, f, opts.Name, opts.Desc, 80, opts.Icon, nil, opts.Tag)
     holder.Size = UDim2.new(1, -(opts.Icon and 40 or 14) - 92, 0, hasDesc and 46 or 32)
 
     local box = new("TextBox", {
@@ -2848,7 +2874,7 @@ function Section:Dropdown(opts)
 
     local f = newRow(self, ROW_H, true)
     local head = new("TextButton", {Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, ROW_H), ZIndex = 4, Parent = f})
-    local holder = labels(win, f, opts.Name, nil, 150, opts.Icon, true)
+    local holder = labels(win, f, opts.Name, nil, 150, opts.Icon, true, opts.Tag)
 
     local sel = new("Frame", {BackgroundColor3 = T.Hover, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 7), Size = UDim2.fromOffset(120, 26), ZIndex = 2, Parent = f}, {corner(6)})
     win:bind(sel, "BackgroundColor3", "Hover")
@@ -3041,7 +3067,7 @@ function Section:Input(opts)
     local win = self.Window
     local T = win.T
     local f = newRow(self, ROW_H)
-    local holder = labels(win, f, opts.Name, opts.Desc, 160, opts.Icon)
+    local holder = labels(win, f, opts.Name, opts.Desc, 160, opts.Icon, nil, opts.Tag)
     autoHeight(win, f, holder, ROW_H)
     local wrap = chip(win, f, 150, 26)
     local box = new("TextBox", {
@@ -3085,7 +3111,7 @@ function Section:Keybind(opts)
     local T = win.T
     local key = opts.Default
     local f = newRow(self, ROW_H)
-    local holder = labels(win, f, opts.Name, opts.Desc, 90, opts.Icon)
+    local holder = labels(win, f, opts.Name, opts.Desc, 90, opts.Icon, nil, opts.Tag)
     autoHeight(win, f, holder, ROW_H)
     local btnChip = chip(win, f, 56, 24)
     local line = btnChip:FindFirstChildOfClass("UIStroke")
@@ -3169,7 +3195,7 @@ function Section:ColorPicker(opts)
 
     local f = newRow(self, ROW_H, true)
     local head = new("TextButton", {Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, ROW_H), ZIndex = 4, Parent = f})
-    labels(win, f, opts.Name, nil, 60, opts.Icon, true)
+    labels(win, f, opts.Name, nil, 60, opts.Icon, true, opts.Tag)
     local swatch = new("Frame", {BackgroundColor3 = color, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 12), Size = UDim2.fromOffset(28, 16),
         ZIndex = 2, Parent = f}, {corner(4)})
     sstroke(win, swatch, "Stroke", 1, 0)
@@ -3292,7 +3318,7 @@ end
 function Section:Progress(opts)
     local win = self.Window
     local f = newRow(self, 48, true)
-    local holder = labels(win, f, opts.Name, nil, 90, opts.Icon, 15)
+    local holder = labels(win, f, opts.Name, nil, 90, opts.Icon, 15, opts.Tag)
     holder.Size = UDim2.new(1, -(opts.Icon and 40 or 14) - 100, 0, 30)
     local pct = text({Text = "0%", FontFace = F.Mono, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0),
         Position = UDim2.new(1, -14, 0, 0), Size = UDim2.fromOffset(100, 30), Parent = f})
@@ -3315,7 +3341,7 @@ end
 function Section:Stat(opts)
     local win = self.Window
     local f = newRow(self, ROW_H, true)
-    labels(win, f, opts.Name, nil, 130, opts.Icon)
+    labels(win, f, opts.Name, nil, 130, opts.Icon, nil, opts.Tag)
     local val = text({Text = tostring(opts.Value or "-"), FontFace = F.SemiBold, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Right,
         AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0), Size = UDim2.fromOffset(150, 20), Parent = f})
     win:bind(val, "TextColor3", "Text")
@@ -3541,9 +3567,10 @@ end
 local Tab = {}
 Tab.__index = Tab
 
-function Tab:CreateSection(o)
+function Tab:CreateSection(o, extra)
     local name = type(o) == "table" and (o.Name or o.Title) or o
-    return setmetatable({v = self.v:Section(name)}, Section)
+    local opts = type(o) == "table" and o or extra or {}
+    return setmetatable({v = self.v:Section(name, {Collapsed = opts.Collapsed == true})}, Section)
 end
 
 local Window = {}
@@ -3590,7 +3617,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.13.1"
+    local version = o.Version or "1.13.2"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3769,7 +3796,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.13.1"
+local HUB_VERSION = "1.13.2"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -3780,7 +3807,7 @@ local GAMES = {
         Name = "Anime Battle Arena",
         Key = "aba",
         Icon = "swords",
-        Version = "1.6.2",
+        Version = "1.7.0",
         Detect = function() return game.GameId == 578392296 or game.PlaceId == 1458767429 end,
     },
     {
