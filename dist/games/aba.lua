@@ -381,9 +381,56 @@ onCleanup(function()
     table.clear(characterConnections)
 end)
 
-local nanami = {enabled = supported, last = "waiting", hits = 0}
+local nanami = {enabled = correctGame, last = "waiting", hits = 0}
 state.Nanami = nanami
 do
+
+    local tapWays = {
+        mouse = function(x, y)
+            local vim = game:GetService("VirtualInputManager")
+            vim:SendMouseButtonEvent(x, y, 0, true, game, 0)
+            task.wait(0.03)
+            vim:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        end,
+        touch = function(x, y)
+            local vim = game:GetService("VirtualInputManager")
+            vim:SendTouchEvent(1, 0, x, y)
+            task.wait(0.03)
+            vim:SendTouchEvent(1, 2, x, y)
+        end,
+        native = function()
+            if type(mouse1click) ~= "function" then error("no mouse1click") end
+            mouse1click()
+        end,
+    }
+    local tapOrder = {"mouse", "touch", "native"}
+    local lastTap = 0
+    connect(UIS.InputBegan, function(input)
+        local kind = input.UserInputType
+        if kind == Enum.UserInputType.MouseButton1 or kind == Enum.UserInputType.Touch then lastTap = os.clock() end
+    end)
+
+    local function tap()
+        local cam = workspace.CurrentCamera
+        local size = cam and cam.ViewportSize or Vector2.new(800, 600)
+        local tried = {}
+        for i, way in ipairs(tapOrder) do
+            local started = os.clock()
+            local sent, why = pcall(tapWays[way], size.X / 2, size.Y / 2)
+            if sent then
+                while lastTap < started and os.clock() - started < 0.06 do task.wait() end
+                if lastTap >= started then
+
+                    table.remove(tapOrder, i)
+                    table.insert(tapOrder, 1, way)
+                    return true, way
+                end
+                why = "the game didn't see it"
+            end
+            table.insert(tried, way .. ": " .. tostring(why))
+        end
+        return false, table.concat(tried, "; ")
+    end
 
     local TARGET = 0.7
     local current, clicked = nil, setmetatable({}, {__mode = "k"})
@@ -398,7 +445,7 @@ do
     connect(RunService.Heartbeat, function()
         local gui = current
         if not gui then return end
-        if not alive or not nanami.enabled or not supported or not gui.Parent or clicked[gui] or not aiming() then
+        if not alive or not nanami.enabled or not correctGame or not gui.Parent or clicked[gui] or not aiming() then
             if not gui.Parent then current = nil end
             return
         end
@@ -409,11 +456,13 @@ do
         windows[gui] = windows[gui] or (0.004 + math.random() * 0.012)
         if math.abs(TARGET - x) > windows[gui] then return end
         clicked[gui] = true
-        if not canInput() then nanami.last = "skipped (roblox not focused)" return end
+        if UIS:GetFocusedTextBox() then nanami.last = "skipped (typing)" return end
         if not rollHit("nanami") then nanami.last = "left to you (hit chance)" return end
-        local ok, reason = pcall(click)
-        if ok then nanami.hits = nanami.hits + 1 nanami.last = string.format("hit at %.3f", x)
-        else nanami.last = "click failed: " .. tostring(reason) end
+        task.spawn(function()
+            local ok, how = tap()
+            if ok then nanami.hits = nanami.hits + 1 nanami.last = string.format("hit at %.3f (%s)", x, how)
+            else nanami.last = "tap failed: " .. how end
+        end)
     end)
 end
 
@@ -649,6 +698,151 @@ do
     end)
 end
 
+local sweeps = {enabled = false, teamMode = "enemies", range = 250, frames = 6, last = "waiting for a move", casts = 0, hits = 0}
+state.Sweeps = sweeps
+
+sweeps.MOVES = {
+    {key = "gaaraTsunami", name = "Gaara: Sand Tsunami", chars = {"Gaara"}, part = "Tsunami"},
+    {key = "gaaraGreat", name = "Gaara: Great Tsunami", chars = {"Gaara"}, part = "GreatTsunami"},
+
+    {key = "josephJeep", name = "Old Joseph: Jeep", chars = {"Old Joseph"}, part = "Jeep", model = true, hold = 0.2},
+    {key = "josephBarrel", name = "Old Joseph: Barrel", chars = {"Old Joseph"}, part = "Barrel", hold = 0.34},
+    {key = "ichigoGetsuga", name = "Ichigo: Getsuga", chars = {"Ichigo"}, part = "NewGetsuga"},
+    {key = "grimmjowClaw", name = "Grimmjow: Panther Claw", chars = {"Grimmjow"}, part = "Bal"},
+    {key = "akainuFist", name = "Akainu: Lava Fist", chars = {"Akainu"}, part = "Fist"},
+    {key = "dekuSmash", name = "Deku: Delaware Smash", chars = {"Deku", "Vigilante Deku"}, part = "Ball"},
+    {key = "bakugouBlast", name = "Bakugou: Gauntlet Blast", chars = {"Bakugou"}, part = "GauntletBlast"},
+    {key = "gojoPurple", name = "Gojo: Hollow Purple", chars = {"Satoru Gojo", "[Legacy] Satoru Gojo"}, part = "Ball", hold = 0.34},
+    {key = "rengokuTiger", name = "Rengoku: Flaming Tiger", chars = {"Kyojuro Rengoku"}, part = "@Fire"},
+    {key = "kazumaArrow", name = "Kazuma: Sniper Arrow", chars = {"Kazuma"}, part = "KazumaArrow", hold = 0.34},
+}
+sweeps.on = {}
+for _, move in ipairs(sweeps.MOVES) do sweeps.on[move.key] = true end
+do
+    local armedUntil = 0
+    local busy = setmetatable({}, {__mode = "k"})
+
+    local function myCharacterName()
+        local character = player.Character
+        return character and (character:GetAttribute("LastLoadedChar") or player:GetAttribute("LastLoadedChar")) or nil
+    end
+
+    local function partName(move)
+        if move.part == "@Fire" then return player.Name .. "Fire" end
+        return move.part
+    end
+
+    local function matches(move, name, charName)
+        if not sweeps.on[move.key] or partName(move) ~= name then return false end
+
+        for _, c in ipairs(move.chars) do
+            if charName:sub(1, #c) == c then return true end
+        end
+        return false
+    end
+
+    local function targets(from)
+        local list = {}
+        local live = workspace:FindFirstChild("Live")
+        if not live then return list end
+        for _, model in ipairs(live:GetChildren()) do
+            local root, humanoid = Game.aliveRoot(model)
+            if root and model ~= player.Character and not model:FindFirstChild("NoTarg") then
+                local owner = Players:GetPlayerFromCharacter(model) or Game.ownerOf(model)
+                local ok
+                if owner == player then ok = false
+                elseif owner then ok = Game.teamAllows(owner, sweeps.teamMode) and not Game.onAfkTeam(owner)
+                else ok = not model:HasTag("FRIENDLYDUMMY") end
+                local distance = (root.Position - from).Magnitude
+                if ok and distance <= sweeps.range then
+                    list[#list + 1] = {root = root, humanoid = humanoid, distance = distance}
+                end
+            end
+        end
+        table.sort(list, function(a, b) return a.distance < b.distance end)
+        return list
+    end
+
+    local function place(object, cframe)
+        if object:IsA("Model") then
+            object:PivotTo(cframe)
+            for _, part in ipairs(object:GetDescendants()) do
+                if part:IsA("BasePart") then part.AssemblyLinearVelocity = Vector3.zero end
+            end
+        else
+            object.CFrame = cframe
+            object.AssemblyLinearVelocity = Vector3.zero
+        end
+    end
+
+    local function sweep(object, move)
+        busy[object] = true
+        local ok, reason = pcall(function()
+
+            if move.model then task.wait(0.3) end
+            local root = Game.ownRoot()
+            if not root then return end
+            local list = targets(root.Position)
+            local visited, started = 0, os.clock()
+            for _, target in ipairs(list) do
+                if not alive or not sweeps.enabled or not object.Parent or os.clock() - started > 12 then break end
+                if target.root.Parent and target.humanoid.Health > 0 then
+                    local frames, untilTime = 0, move.hold and (os.clock() + move.hold) or nil
+                    while object.Parent and target.root.Parent do
+                        if untilTime then
+                            if os.clock() >= untilTime then break end
+                        elseif frames >= sweeps.frames then
+                            break
+                        end
+                        place(object, target.root.CFrame)
+                        frames = frames + 1
+                        RunService.Heartbeat:Wait()
+                    end
+                    visited = visited + 1
+                end
+            end
+            sweeps.hits = sweeps.hits + visited
+            sweeps.last = ("%s: went through %d/%d"):format(move.name, visited, #list)
+        end)
+        busy[object] = nil
+        if not ok then sweeps.last = "stopped: " .. tostring(reason) end
+    end
+
+    local function onThrown(object)
+        if not alive or not sweeps.enabled or os.clock() > armedUntil or busy[object] then return end
+        if not (object:IsA("BasePart") or object:IsA("Model")) then return end
+        local charName = myCharacterName()
+        if not charName then return end
+        for _, move in ipairs(sweeps.MOVES) do
+            if matches(move, object.Name, charName) then
+
+                local root = Game.ownRoot()
+                local pos = object:IsA("Model") and object:GetPivot().Position or object.Position
+                if move.part ~= "@Fire" and root and (pos - root.Position).Magnitude > 40 then return end
+                sweeps.casts = sweeps.casts + 1
+                task.spawn(sweep, object, move)
+                return
+            end
+        end
+    end
+
+    local thrownConnection
+    local function watchThrown(folder)
+        if thrownConnection then thrownConnection:Disconnect() end
+        thrownConnection = connect(folder.ChildAdded, function(child) task.defer(onThrown, child) end)
+    end
+    if workspace:FindFirstChild("Thrown") then watchThrown(workspace.Thrown) end
+    connect(workspace.ChildAdded, function(child) if child.Name == "Thrown" then watchThrown(child) end end)
+
+    local function bind(character)
+        connect(character.ChildAdded, function(child)
+            if child.Name == "UsingSkill" then armedUntil = os.clock() + 4 end
+        end)
+    end
+    if player.Character then bind(player.Character) end
+    connect(player.CharacterAdded, bind)
+end
+
 local autoBlock = {enabled = false, range = 14, hold = 0.45, skipGuardbreaks = true, whileFarming = false,
     faceCheck = true, faceAngle = 75, pingComp = true, reactMs = 0, missChance = 0, letFinisher = false,
     last = "off", blocks = 0}
@@ -811,7 +1005,8 @@ end
 
 local bot = {enabled = false, sprint = true, dash = true, useMoves = true, reach = 10, last = "off", target = "none",
     dashes = 0, jumps = 0, targets = "Players", teamMode = "enemies", skipAfk = true, stick = true,
-    lockCamera = true, aimMouse = false, targetPlayer = nil, awaken = true, smart = true, targetMode = "nearest", skipUlt = true}
+    lockCamera = true, aimMouse = false, targetPlayer = nil, awaken = true, smart = true, targetMode = "nearest", skipUlt = true,
+    trade = true, jumpOver = true, trades = 0, escapes = 0}
 state.Bot = bot
 do
     local PathfindingService = game:GetService("PathfindingService")
@@ -819,7 +1014,7 @@ do
     local RENDER = "CatnAutoFarm"
     local CAMERA = "CatnAutoFarmCamera"
     local lockRoot = nil
-    local moveDir, wantJump = Vector3.zero, false
+    local moveDir = Vector3.zero
     local hazards, hazardsReady = {}, false
     local blocked = setmetatable({}, {__mode = "k"})
     local running = false
@@ -988,6 +1183,81 @@ do
         end
     end
 
+    local SINGLE_JUMP, DOUBLE_JUMP = 6, 13
+    local jumpBusy = false
+    local function jump(double)
+        if jumpBusy or not Game.ownRoot() then return end
+        jumpBusy = true
+        bot.jumps = bot.jumps + 1
+        task.spawn(function()
+            tapAction("MobileJump")
+            if double then
+                local t = os.clock()
+                while os.clock() - t < 0.6 do
+                    task.wait()
+                    local r = Game.ownRoot()
+                    if not r then break end
+                    if os.clock() - t > 0.22 and r.AssemblyLinearVelocity.Y < 10 then break end
+                end
+                tapAction("MobileJump")
+            end
+            task.wait(0.3)
+            jumpBusy = false
+        end)
+    end
+
+    local function feetY(rootPart)
+        local hit = workspace:Raycast(rootPart.Position, Vector3.new(0, -7, 0), rayParams)
+        return hit and hit.Position.Y or rootPart.Position.Y - 3, hit ~= nil
+    end
+
+    local function obstacle(rootPart, dir, reach)
+        local feet = feetY(rootPart)
+        local base = Vector3.new(rootPart.Position.X, feet, rootPart.Position.Z)
+        local nearest
+        for _, h in ipairs({0.9, 2.6, 4.6}) do
+            local hit = workspace:Raycast(base + Vector3.new(0, h, 0), dir * reach, rayParams)
+            if hit and hit.Normal.Y < 0.6 then
+                local d = ((hit.Position - base) * Vector3.new(1, 0, 1)).Magnitude
+                nearest = math.min(nearest or math.huge, d)
+            end
+        end
+        if not nearest then return nil end
+
+        local top
+        for _, extra in ipairs({0.35, 1.5}) do
+            local spot = base + dir * (nearest + extra)
+            local down = workspace:Raycast(spot + Vector3.new(0, 24, 0), Vector3.new(0, -24, 0), rayParams)
+            local y = down and down.Position.Y or math.huge
+            top = math.max(top or -math.huge, y)
+        end
+        return top - feet, nearest
+    end
+
+    local function canHop(rootPart, dir, height, distance)
+        if not bot.jumpOver or height > DOUBLE_JUMP then return nil end
+        local feet = feetY(rootPart)
+        local over = Vector3.new(rootPart.Position.X, feet + height + 3.5, rootPart.Position.Z)
+        if workspace:Raycast(over, dir * (distance + 6), rayParams) then return nil end
+        local far = rootPart.Position + dir * (distance + 5)
+        if not safeAt(far) then return nil end
+        return height > SINGLE_JUMP
+    end
+
+    local function gapLanding(rootPart, dir)
+        local feet = feetY(rootPart)
+        for d = 6, 14, 2 do
+            local spot = rootPart.Position + dir * d
+            local hit = workspace:Raycast(spot + Vector3.new(0, 3, 0), Vector3.new(0, -12, 0), rayParams)
+            if hit and math.abs(hit.Position.Y - feet) < 4 and safeAt(spot) then
+
+                if not workspace:Raycast(Vector3.new(rootPart.Position.X, feet + 4, rootPart.Position.Z), dir * d, rayParams) then
+                    return d
+                end
+            end
+        end
+    end
+
     local lastDash = -math.huge
     local function tryDash(rootPart, targetPos)
         if not bot.dash or os.clock() - lastDash < 2.5 then return end
@@ -1030,8 +1300,145 @@ do
         end
     end
 
+    local trade = {swingAt = -math.huge, model = nil, blockUntil = 0, hitsOnMe = {}, lastEscape = -math.huge,
+        landed = 0, landedAt = -math.huge, followUntil = 0}
+    local tradeWatched = setmetatable({}, {__mode = "k"})
+
+    local M1_ANIMS = {["1461128166"] = 1, ["1461128859"] = 2, ["1461136273"] = 3, ["1461136875"] = 4, ["1461137417"] = 5}
+
+    local FLINCH_ANIMS = {["1461138523"] = true, ["1461139102"] = true, ["1461140455"] = true, ["1461142361"] = true}
+    local function watchSwings(dummy)
+        if tradeWatched[dummy.model] then return end
+        local animator = dummy.humanoid:FindFirstChildOfClass("Animator")
+        if not animator then return end
+        tradeWatched[dummy.model] = true
+        local model = dummy.model
+        connect(animator.AnimationPlayed, function(track)
+            if track.Looped or trade.model ~= model then return end
+            local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+$")
+            if not id or FLINCH_ANIMS[id] or track.Length > 1.5 then return end
+            trade.swingAt, trade.swingHit = os.clock(), M1_ANIMS[id] or 0
+        end)
+        local last = dummy.humanoid.Health
+        connect(dummy.humanoid.HealthChanged, function(hp)
+            if hp < last and trade.model == model and os.clock() - lastSwing < 0.6 then
+                if os.clock() - trade.landedAt > 1 then trade.landed = 0 end
+                trade.landed = trade.landed + 1
+                trade.landedAt = os.clock()
+                if trade.landed >= 5 then
+                    trade.landed = 0
+                    trade.followUntil = os.clock() + 1.2
+                end
+            end
+            last = hp
+        end)
+    end
+    local myHumanoid = nil
+    local function watchMe()
+        local _, humanoid = Game.ownRoot()
+        if not humanoid or myHumanoid == humanoid then return end
+        myHumanoid = humanoid
+        local last = humanoid.Health
+        connect(humanoid.HealthChanged, function(hp)
+            if hp < last - 0.5 then
+                table.insert(trade.hitsOnMe, os.clock())
+                if #trade.hitsOnMe > 8 then table.remove(trade.hitsOnMe, 1) end
+            end
+            last = hp
+        end)
+    end
+    local function recentHitsOnMe(window)
+        local n = 0
+        for _, t in ipairs(trade.hitsOnMe) do if os.clock() - t < window then n = n + 1 end end
+        return n
+    end
+    local function facingMe(dummy, rootPart)
+        local toMe = (rootPart.Position - dummy.root.Position) * Vector3.new(1, 0, 1)
+        local look = dummy.root.CFrame.LookVector * Vector3.new(1, 0, 1)
+        if toMe.Magnitude < 1 or look.Magnitude < 0.1 then return true end
+        return look.Unit:Dot(toMe.Unit) > 0.35
+    end
+
+    local function defend(dummy, rootPart, dist)
+        if not bot.trade then return false end
+        if os.clock() < trade.blockUntil then return true end
+
+        if player.Character and Game.isBlocking(player.Character) then
+            trade.wasBlocking = true
+            return true
+        end
+        if trade.wasBlocking then
+            trade.wasBlocking = false
+            if dist <= M1_REACH and not Game.isBlocking(dummy.model) then
+                bot.trades = bot.trades + 1
+                bot.last = "hitting " .. dummy.model.Name .. " back after a block"
+                lastSwing = os.clock()
+                task.spawn(tapAction, "MouseClick")
+                return true
+            end
+        end
+
+        if recentHitsOnMe(1) >= 2 and os.clock() - trade.landedAt > 0.8 and os.clock() - trade.lastEscape > 3 and bot.dash then
+            local away = (rootPart.Position - dummy.root.Position) * Vector3.new(1, 0, 1)
+            local side = away.Magnitude > 0.1
+                and CFrame.Angles(0, math.rad(math.random() < 0.5 and 60 or -60), 0):VectorToWorldSpace(away.Unit)
+                or rootPart.CFrame.RightVector
+            if safeAt(rootPart.Position + side * 10) then
+                trade.lastEscape = os.clock()
+                bot.escapes = bot.escapes + 1
+                rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + side)
+                task.spawn(tapAction, "Dodge")
+                bot.last = "getting out of " .. dummy.model.Name .. "'s combo"
+                return true
+            end
+        end
+
+        local blockAction = gameAction("Block")
+        local since = os.clock() - trade.swingAt
+        if since < 0.2 and trade.swingHit == 5 and dist <= M1_REACH + 2 and bot.dash
+            and os.clock() - trade.lastEscape > 1.5 and facingMe(dummy, rootPart) then
+
+            trade.swingAt = -math.huge
+            local away = (rootPart.Position - dummy.root.Position) * Vector3.new(1, 0, 1)
+            local side = away.Magnitude > 0.1
+                and CFrame.Angles(0, math.rad(math.random() < 0.5 and 75 or -75), 0):VectorToWorldSpace(away.Unit)
+                or rootPart.CFrame.RightVector
+            if safeAt(rootPart.Position + side * 10) then
+                trade.lastEscape = os.clock()
+                bot.escapes = bot.escapes + 1
+                rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + side)
+                task.spawn(tapAction, "Dodge")
+                bot.last = "dodging " .. dummy.model.Name .. "'s finisher"
+                return true
+            end
+        end
+        if since < 0.2 and trade.swingHit ~= 5 and dist <= M1_REACH + 2
+            and facingMe(dummy, rootPart) and blockAction
+            and not (autoBlock.enabled and autoBlock.whileFarming) then
+            trade.swingAt = -math.huge
+            local hold = 0.32 + timing.ping
+            trade.blockUntil = os.clock() + hold + 0.05
+            bot.trades = bot.trades + 1
+            bot.last = "blocking " .. dummy.model.Name .. "'s swing, then hitting back"
+            task.spawn(function()
+                pcall(function() blockAction:Fire(true) end)
+                task.wait(hold)
+                pcall(function() blockAction:Fire(false) end)
+
+                lastSwing = os.clock()
+                tapAction("MouseClick")
+            end)
+            return true
+        end
+        return false
+    end
+
     local function attack(dummy, rootPart, dist)
         face(dummy, rootPart)
+        trade.model = dummy.model
+        watchSwings(dummy)
+        watchMe()
+        if defend(dummy, rootPart, dist) then return end
         local blocking = bot.smart and Game.isBlocking(dummy.model)
         if bot.awaken and dist <= M1_REACH and Game.chargeFraction(player) >= 1 and os.clock() - lastAwaken > 3 then
             lastAwaken = os.clock()
@@ -1055,7 +1462,18 @@ do
     local function clearLine(from, to)
         local offset = (to - from) * Vector3.new(1, 0, 1)
         if offset.Magnitude < 1 then return true end
-        if workspace:Raycast(from, offset, rayParams) then return false end
+        if workspace:Raycast(from, offset, rayParams) then
+
+            local rootPart = Game.ownRoot()
+            if not (rootPart and (rootPart.Position - from).Magnitude < 1) then return false end
+            local dir = offset.Unit
+            local height, distance = obstacle(rootPart, dir, offset.Magnitude)
+            if not height or canHop(rootPart, dir, height, distance) == nil then return false end
+
+            local past = from + dir * (distance + 3)
+            local rest = (to - past) * Vector3.new(1, 0, 1)
+            if rest:Dot(dir) > 0 and workspace:Raycast(past, rest, rayParams) then return false end
+        end
         local steps = math.clamp(math.floor(offset.Magnitude / 6), 1, 12)
         for step = 1, steps do
             if not safeAt(from + offset * (step / steps)) then return false end
@@ -1081,6 +1499,7 @@ do
         local chaseTarget, chaseStart = nil, 0
         local failStreak = 0
         local jumpedAt = nil
+        local skipAt = 0
         while bot.enabled and alive do
             local rootPart, humanoid = Game.ownRoot()
             if not rootPart then
@@ -1205,6 +1624,12 @@ do
                         if os.clock() - clearAt > 0.2 then
                             clear, clearAt = clearLine(rootPart.Position, dummy.root.Position), os.clock()
                         end
+                        if os.clock() < trade.followUntil and clear and dist > 8 and dist < 40 then
+
+                            trade.followUntil = 0
+                            lastDash = -math.huge
+                            tryDash(rootPart, dummy.root.Position)
+                        end
                         local direct = false
                         if clear then
 
@@ -1216,7 +1641,22 @@ do
                             end
                             local aim = (dummy.root.Position + lead - rootPart.Position) * Vector3.new(1, 0, 1)
                             local dir = aim.Magnitude > 0.1 and aim.Unit or gap.Unit
-                            if safeAt(rootPart.Position + dir * 3) then
+                            local aheadSafe, why = safeAt(rootPart.Position + dir * 3)
+                            if not aheadSafe and why == "no floor" and bot.jumpOver then
+
+                                local landing = gapLanding(rootPart, dir)
+                                if landing then
+                                    aheadSafe = true
+                                    local _, grounded = feetY(rootPart)
+                                    if grounded then jump(landing > 8) end
+                                end
+                            end
+                            if aheadSafe then
+                                local height, distance = obstacle(rootPart, dir, 6)
+                                if height and height > 1.2 and distance < (height > SINGLE_JUMP and 5 or 3.5) then
+                                    local double = canHop(rootPart, dir, height, distance)
+                                    if double ~= nil then jump(double) end
+                                end
                                 direct = true
                                 path, pathTarget = nil, dummy
                                 failStreak = 0
@@ -1249,6 +1689,20 @@ do
                                 if not waypoint then
                                     path = nil
                                 else
+
+                                    if os.clock() - skipAt > 0.15 then
+                                        skipAt = os.clock()
+                                        for j = math.min(#path, index + 8), index + 1, -1 do
+                                            local w = path[j]
+                                            if w.Action ~= Enum.PathWaypointAction.Jump
+                                                and math.abs(w.Position.Y - waypoint.Position.Y) < 3
+                                                and clearLine(rootPart.Position, w.Position) then
+                                                index = j
+                                                waypoint = w
+                                                break
+                                            end
+                                        end
+                                    end
                                     local toPoint = (waypoint.Position - rootPart.Position) * Vector3.new(1, 0, 1)
                                     if toPoint.Magnitude < 2.5 then
                                         index = index + 1
@@ -1256,7 +1710,13 @@ do
 
                                         if waypoint.Action == Enum.PathWaypointAction.Jump and jumpedAt ~= waypoint then
                                             jumpedAt = waypoint
-                                            wantJump = true
+                                            jump(waypoint.Position.Y - feetY(rootPart) > SINGLE_JUMP - 1)
+                                        else
+                                            local height, distance = obstacle(rootPart, toPoint.Unit, 4)
+                                            if height and height > 1.2 and distance < 3.5
+                                                and canHop(rootPart, toPoint.Unit, height, distance) ~= nil then
+                                                jump(height > SINGLE_JUMP)
+                                            end
                                         end
                                         local dir = toPoint.Unit
 
@@ -1281,7 +1741,7 @@ do
                             stuckFrom, stuckAt, jumps = rootPart.Position, os.clock(), 0
                         elseif moveDir.Magnitude > 0 and os.clock() - stuckAt > 0.8 then
                             jumps = jumps + 1
-                            wantJump = true
+                            jump(jumps >= 2)
                             stuckAt = os.clock()
                             if jumps >= 3 then path, jumps, clear, clearAt = nil, 0, false, os.clock() end
                         end
@@ -1321,11 +1781,6 @@ do
             local _, humanoid = Game.ownRoot()
             if not humanoid then return end
             humanoid:Move(moveDir, false)
-            if wantJump then
-                wantJump = false
-                bot.jumps = bot.jumps + 1
-                humanoid.Jump = true
-            end
         end)
     end
 
@@ -2314,6 +2769,17 @@ end)
 local spawner = {enabled = false, character = "", noAfk = false, last = "off"}
 state.Spawner = spawner
 do
+
+    local LAST_FILE = "BPHubABA/last_character.txt"
+    pcall(function() if isfile(LAST_FILE) then spawner.lastSpawned = readfile(LAST_FILE) end end)
+    local function rememberCharacter(name)
+        if type(name) ~= "string" or name == "" or name == spawner.lastSpawned then return end
+        spawner.lastSpawned = name
+        pcall(function()
+            if not isfolder("BPHubABA") then makefolder("BPHubABA") end
+            writefile(LAST_FILE, name)
+        end)
+    end
     local pressedAt, afkAt, lobbySince = 0, 0, nil
 
     local function hud() return player:FindFirstChildOfClass("PlayerGui") and player.PlayerGui:FindFirstChild("HUD") end
@@ -2337,7 +2803,8 @@ do
         local names, seen = {}, {}
         if holder then
             for _, button in ipairs(holder:GetDescendants()) do
-                if button:IsA("ImageButton") and button.Name ~= "Icon" and not seen[button.Name] then
+                if button:IsA("ImageButton") and button.Name ~= "Icon" and not seen[button.Name]
+                    and not button:GetAttribute("TestPlaceOnly") then
                     seen[button.Name] = true
                     names[#names + 1] = button.Name
                 end
@@ -2349,18 +2816,63 @@ do
 
     local function pick()
         local wanted = spawner.character:lower():gsub("^%s+", ""):gsub("%s+$", "")
-        if wanted == "" then return player:GetAttribute("LastLoadedChar") end
         local names = spawner.Characters()
+        if wanted == "" then
+
+            local last = player:GetAttribute("LastLoadedChar")
+            if last and last ~= "" then return last end
+            for _, name in ipairs(names) do if name == spawner.lastSpawned then return name end end
+            return names[1]
+        end
         for _, name in ipairs(names) do if name:lower() == wanted then return name end end
         for _, name in ipairs(names) do if name:lower():sub(1, #wanted) == wanted then return name end end
         return nil
     end
     spawner.Pick = pick
 
+    local titleSince = nil
+    local function titleScreen()
+        local pg = player:FindFirstChildOfClass("PlayerGui")
+        local menu = pg and pg:FindFirstChild("MainMenu")
+        local play = menu and menu:FindFirstChild("MainGame")
+        if not (play and menu.Enabled and play.Visible) or player:HasTag("PastMainMenu") then return nil end
+        return play
+    end
+    local function pressPlay(play)
+        if type(getconnections) == "function" then
+            local ok, conns = pcall(getconnections, play.Activated)
+            if ok and conns and #conns > 0 then
+                for _, c in ipairs(conns) do pcall(function() c:Fire() end) end
+                return
+            end
+        end
+        if type(firesignal) == "function" and pcall(firesignal, play.Activated) then return end
+        local loaded = game:GetService("ReplicatedStorage"):FindFirstChild("Loaded")
+        if loaded then
+            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            loaded:FireServer()
+            pcall(function() play.Parent:Destroy() end)
+        end
+    end
+    spawner.TitleScreen = titleScreen
+
     task.spawn(function()
         while alive do
             local remote = input()
-            if spawner.enabled and remote and correctGame then
+            local play = spawner.enabled and correctGame and titleScreen()
+            if play then
+                titleSince = titleSince or os.clock()
+                spawner.last = "on the title screen, pressing Play"
+                if os.clock() - titleSince > 2 and os.clock() - pressedAt > 4 then
+                    pressedAt = os.clock()
+                    pressPlay(play)
+                end
+            else
+                titleSince = nil
+            end
+            if play then
+
+            elseif spawner.enabled and remote and correctGame then
                 if spawner.InLobby() then
                     lobbySince = lobbySince or os.clock()
                     local gui = hud()
@@ -2368,19 +2880,24 @@ do
                     local name = pick()
                     if not name then
                         spawner.last = "no character called \"" .. spawner.character .. "\""
-                    elseif browsing then
+                    elseif browsing and not spawner.openedMenu then
                         spawner.last = "waiting, the character menu is open"
                     elseif os.clock() - lobbySince > 2 and os.clock() - pressedAt > 4 then
 
                         pressedAt = os.clock()
                         spawner.last = "spawning as " .. name
+                        spawner.openedMenu = true
+                        remote:FireServer("CharacterOpen")
+                        task.wait(0.35)
                         remote:FireServer("CharacterButton", name)
-                        task.wait(0.5)
+                        task.wait(0.35)
                         remote:FireServer("ClickPlay")
                     end
                 else
                     lobbySince = nil
+                    spawner.openedMenu = false
                     spawner.last = "in a match"
+                    rememberCharacter(player:GetAttribute("LastLoadedChar"))
                 end
             elseif not spawner.enabled then
                 lobbySince = nil
@@ -2396,27 +2913,79 @@ do
     end)
 end
 
-local hop = {enabled = false, after = 90, last = "off"}
+local hop = {enabled = false, after = 90, last = "off", skipJuggernaut = false, skip = {Juggernaut = true}}
 state.Hop = hop
 do
-    local idleSince, hopping = nil, false
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local idleSince, badSince, hoppingUntil = nil, nil, 0
+
+    local function currentMode()
+        local mode = workspace:GetAttribute("GameMode")
+        return type(mode) == "string" and mode or nil
+    end
+
+    function hop.Candidates()
+        local folder = ReplicatedStorage:FindFirstChild("Servers")
+        local here = workspace:GetAttribute("ServerBrowserJobId") or game.JobId
+        local list = {}
+        if not folder then return list end
+        for _, server in ipairs(folder:GetChildren()) do
+            local mode = server:GetAttribute("Mode")
+            local players = tonumber(server:GetAttribute("PlayerCount")) or 0
+            local max = tonumber(server:GetAttribute("MaxPlayers")) or 0
+            if server.Name ~= here and server:GetAttribute("Type") == "Public" and type(mode) == "string"
+                and mode ~= "Intermission" and not hop.skip[mode] and players >= 3 and players <= max - 2 then
+                list[#list + 1] = {id = server.Name, mode = mode, players = players, max = max,
+                    name = server:GetAttribute("ServerName") or "?"}
+            end
+        end
+        table.sort(list, function(a, b) return a.players > b.players end)
+        return list
+    end
+
+    function hop.Go(reason)
+        if os.clock() < hoppingUntil then return end
+        hoppingUntil = os.clock() + 25
+        if rejoin.loader ~= "" and type(queue_on_teleport) == "function" then pcall(queue_on_teleport, rejoin.loader) end
+        local list = hop.Candidates()
+
+        local pick = list[math.random(1, math.min(#list, 4))]
+        local remote = ReplicatedStorage:FindFirstChild("ServerTP")
+        if pick and remote then
+            hop.last = ("%s: joining %s (%s, %d/%d)"):format(reason, pick.name, pick.mode, pick.players, pick.max)
+            pcall(function() remote:FireServer(pick.id) end)
+
+            task.delay(12, function()
+                if alive then pcall(function() TeleportService:Teleport(game.PlaceId, player) end) end
+            end)
+        else
+            hop.last = reason .. ": joining a random server"
+            pcall(function() TeleportService:Teleport(game.PlaceId, player) end)
+        end
+    end
+
     task.spawn(function()
         while alive do
+            local mode = currentMode()
+            local bad = hop.skipJuggernaut and correctGame and mode ~= nil and hop.skip[mode] == true
             local idle = bot.enabled and bot.target == "none" and Game.ownRoot() ~= nil and not spawner.InLobby()
-            if hop.enabled and idle then
+            if os.clock() < hoppingUntil then
+
+            elseif bad then
+
+                badSince = badSince or os.clock()
+                local left = math.ceil(4 - (os.clock() - badSince))
+                hop.last = mode .. " here, leaving in " .. math.max(left, 0) .. "s"
+                if left <= 0 then hop.Go(mode .. " here") end
+            elseif hop.enabled and idle then
+                badSince = nil
                 idleSince = idleSince or os.clock()
                 local left = math.ceil(hop.after - (os.clock() - idleSince))
                 hop.last = "nobody to fight, hopping in " .. math.max(left, 0) .. "s"
-                if left <= 0 and not hopping then
-                    hopping = true
-                    hop.last = "hopping to another server"
-                    if rejoin.loader ~= "" and type(queue_on_teleport) == "function" then pcall(queue_on_teleport, rejoin.loader) end
-                    pcall(function() TeleportService:Teleport(game.PlaceId, player) end)
-                    task.delay(20, function() hopping = false idleSince = nil end)
-                end
+                if left <= 0 then hop.Go("nobody to fight") end
             else
-                idleSince = nil
-                hop.last = hop.enabled and "watching" or "off"
+                idleSince, badSince = nil, nil
+                hop.last = (hop.enabled or hop.skipJuggernaut) and ("watching" .. (mode and (" (" .. mode .. ")") or "")) or "off"
             end
             task.wait(1)
         end
@@ -2426,7 +2995,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.5.6",
+    return BPUI:CreateWindow({Version = "1.6.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -2477,7 +3046,7 @@ do
     for _, line in ipairs({
         "RightShift  open/close menu", "End  turn everything off", "F2  auto block", "F3  Black Flash (any character)",
         "F4  ESP", "F5  target panel", "F6  Nanami auto hit", "F7  Yusuke gun sweep",
-        "F8 / F9  Yuji Black Flash / Divergent", "F10  Krillin kiblast", "F11  Auto Farm", "Insert  Comp HUD",
+        "F8 / F9  Yuji Black Flash / Divergent", "F10  Krillin kiblast", "F11  Auto Farm", "F12  Kokushibo timing", "Home  move sweeps", "Insert  Comp HUD",
         "PageUp / PageDown  record / play macro",
     }) do
         keys:AddLabel({Text = line, Style = "Sub"})
@@ -2485,59 +3054,71 @@ do
 end
 
 local farmTab = window:CreateTab({Name = "Auto Farm", Icon = "crosshair"})
+local farmControls = {}
 do
-    local section = farmTab:CreateSection("Auto Farm")
-    local botToggle = addToggle(section, {Name = "Auto Farm", Icon = "bot", Default = false, Flag = "bot_enabled",
-        Description = "Runs, sprints and dashes to the nearest target and fights it with your own M1s and moves. Paths around walls, jumps when it has to, and keeps off pads, kill bricks and edges.",
+    local main = farmTab:CreateSection("Auto Farm")
+    local botToggle = addToggle(main, {Name = "Auto Farm", Icon = "bot", Default = false, Flag = "bot_enabled",
+        Description = "Runs, sprints, jumps and dashes to the nearest target and fights it with your own M1s and moves. Keeps off pads, kill bricks and edges.",
         Callback = function(value) bot.SetEnabled(value) end})
     if not correctGame then botToggle:Lock() end
     presetToggles.bot = botToggle
-    section:AddKeybind({Name = "Key", Default = Enum.KeyCode.F11, Mode = "Press", Flag = "bot_key",
+    main:AddKeybind({Name = "Key", Default = Enum.KeyCode.F11, Mode = "Press", Flag = "bot_key",
         Callback = function() if alive and correctGame then botToggle:Set(not bot.enabled) end end})
-    section:AddDropdown({Name = "Targets", Options = {"Players", "Dummies", "Both"}, Default = "Players", Flag = "bot_targets",
+    ui.botStatus = main:AddLabel({Text = "off", Style = "Sub"})
+
+    local targets = farmTab:CreateSection("Targets")
+    farmControls.targets = targets:AddDropdown({Name = "Targets", Options = {"Players", "Dummies", "Both"}, Default = "Players", Flag = "bot_targets",
         Description = "Dummies on their own only run while you're alone in the server.",
         Callback = function(value) bot.targets = value or "Players" end})
-    teamDropdown(section, "bot_team", function(mode) bot.teamMode = mode end)
-    section:AddToggle({Name = "Skip AFK team", Default = true, Flag = "bot_skip_afk",
-        Callback = function(value) bot.skipAfk = value == true end})
-    section:AddToggle({Name = "Skip players in an ultimate", Default = true, Flag = "bot_skip_ult",
-        Description = "Ignores anyone frozen in an awakening or ultimate animation, or still spawn-protected, since they can't be hurt. Comes back to them once it ends.",
-        Callback = function(value) bot.skipUlt = value == true end})
+    farmControls.team = teamDropdown(targets, "bot_team", function(mode) bot.teamMode = mode end)
     local targetModes = {["Whoever is nearest"] = "nearest", ["Easiest kill"] = "easiest", ["Stay on one until it dies"] = "stay"}
-    section:AddDropdown({Name = "Go after", Options = {"Whoever is nearest", "Easiest kill", "Stay on one until it dies"},
+    farmControls.goAfter = targets:AddDropdown({Name = "Go after", Options = {"Whoever is nearest", "Easiest kill", "Stay on one until it dies"},
         Default = "Whoever is nearest", Flag = "bot_target_mode",
-        Description = "Nearest re-checks ten times a second and always goes for the closest player. Easiest kill weighs health, running and blocking.",
+        Description = "Nearest always goes for the closest player. Easiest kill weighs health, running and blocking.",
         Callback = function(value) bot.targetMode = targetModes[value] or "nearest" end})
-    local lock = farmTab:CreateSection("Lock on")
-    lock:AddToggle({Name = "Lock camera on target", Icon = "crosshair", Default = true, Flag = "bot_lock_camera",
-        Description = "Keeps your view on whoever it's fighting, so moves aimed with the camera go at them.",
-        Callback = function(value) bot.lockCamera = value == true end})
-    local mouseToggle = lock:AddToggle({Name = "Point the mouse at target", Icon = "mouse-pointer-2", Default = false, Flag = "bot_aim_mouse",
-        Description = "For moves aimed with the cursor. Moves your real mouse, so only while Roblox is the focused window.",
-        Callback = function(value) bot.aimMouse = value == true end})
-    if not canAimMouse then mouseToggle:Lock() end
-    section:AddToggle({Name = "Sprint", Icon = "trending-up", Default = true, Flag = "bot_sprint",
-        Callback = function(value) bot.sprint = value == true end})
-    section:AddToggle({Name = "Dash in", Icon = "zap", Default = true, Flag = "bot_dash",
-        Description = "Uses Dodge on straight, safe stretches 14 to 40 studs out.",
-        Callback = function(value) bot.dash = value == true end})
-    section:AddToggle({Name = "Use moves", Icon = "swords", Default = true, Flag = "bot_moves",
+    farmControls.skipAfk = targets:AddToggle({Name = "Skip AFK team", Default = true, Flag = "bot_skip_afk",
+        Callback = function(value) bot.skipAfk = value == true end})
+    farmControls.skipUlt = targets:AddToggle({Name = "Skip players in an ultimate", Default = true, Flag = "bot_skip_ult",
+        Description = "Ignores anyone frozen in an awakening or ultimate, or still spawn-protected, since they can't be hurt.",
+        Callback = function(value) bot.skipUlt = value == true end})
+
+    local fight = farmTab:CreateSection("Fighting")
+    farmControls.moves = fight:AddToggle({Name = "Use moves", Default = true, Flag = "bot_moves",
         Description = "Casts whichever of moves 1-4 is ready once it's next to its target, M1 otherwise.",
         Callback = function(value) bot.useMoves = value == true end})
-    section:AddSlider({Name = "Attack range", Min = 3, Max = 60, Default = 10, Increment = 1, Suffix = " studs", Flag = "bot_reach",
-        Description = "How far out it casts moves. Past 10, ranged moves go off on the way in; melee moves still want it short. M1s always wait until it's in reach.",
+    farmControls.reach = fight:AddSlider({Name = "Move range", Min = 3, Max = 60, Default = 10, Increment = 1, Suffix = " studs", Flag = "bot_reach",
+        Description = "How far out it casts moves. Past 10, ranged moves go off on the way in. M1s always wait until it's in reach.",
         Callback = function(value) bot.reach = math.clamp(tonumber(value) or 10, 3, 60) end})
-    section:AddToggle({Name = "Wait out blocks", Icon = "shield-off", Default = true, Flag = "bot_smart",
-        Description = "Doesn't M1 into someone holding block; saves a guard-break move for them instead.",
-        Callback = function(value) bot.smart = value == true end})
-    section:AddToggle({Name = "Use awakening", Icon = "flame", Default = true, Flag = "bot_awaken",
+    farmControls.awaken = fight:AddToggle({Name = "Use awakening", Default = true, Flag = "bot_awaken",
         Description = "Presses G when the mode bar is full and it's next to someone.",
         Callback = function(value) bot.awaken = value == true end})
-    ui.botStatus = section:AddLabel({Text = "off", Style = "Sub"})
+    farmControls.trade = fight:AddToggle({Name = "M1 trading", Default = true, Flag = "bot_trade",
+        Description = "Hits back the moment a block drops, blocks swings itself when Auto Block isn't on, dodges out after two hits in a row or a finisher, and dashes after its own finisher.",
+        Callback = function(value) bot.trade = value == true end})
+    farmControls.smart = fight:AddToggle({Name = "Wait out blocks", Default = true, Flag = "bot_smart",
+        Description = "Doesn't M1 into someone holding block; saves a guard-break move for them instead.",
+        Callback = function(value) bot.smart = value == true end})
+
+    local move = farmTab:CreateSection("Movement")
+    farmControls.sprint = move:AddToggle({Name = "Sprint", Default = true, Flag = "bot_sprint",
+        Callback = function(value) bot.sprint = value == true end})
+    farmControls.dash = move:AddToggle({Name = "Dash in", Default = true, Flag = "bot_dash",
+        Description = "Dodges forward on straight, safe stretches 14 to 40 studs out, and out of combos.",
+        Callback = function(value) bot.dash = value == true end})
+    farmControls.jump = move:AddToggle({Name = "Jump over things", Default = true, Flag = "bot_jump",
+        Description = "Jumps walls and ledges (double jump up to ~13 studs) and short gaps instead of running around them.",
+        Callback = function(value) bot.jumpOver = value == true end})
+    farmControls.lockCamera = move:AddToggle({Name = "Lock camera on target", Default = true, Flag = "bot_lock_camera",
+        Description = "Keeps your view on whoever it's fighting, so moves aimed with the camera go at them.",
+        Callback = function(value) bot.lockCamera = value == true end})
+    farmControls.aimMouse = move:AddToggle({Name = "Point the mouse at target", Default = false, Flag = "bot_aim_mouse",
+        Description = "For moves aimed with the cursor. Moves your real mouse, so only while Roblox is the focused window.",
+        Callback = function(value) bot.aimMouse = value == true end})
+    if not canAimMouse then farmControls.aimMouse:Lock() end
 
     local spawn = farmTab:CreateSection("Auto spawn")
-    local spawnToggle = addToggle(spawn, {Name = "Auto spawn", Icon = "play", Default = false, Flag = "spawn_enabled", Panic = false,
-        Description = "In the lobby, picks your character and presses Play for you, so a full AFK farm never sits on the play screen.",
+    local spawnToggle = addToggle(spawn, {Name = "Auto spawn", Default = false, Flag = "spawn_enabled", Panic = false,
+        Description = "Presses Play on the title screen and picks your character in the lobby, so a farm never sits on a menu after a hop or a death.",
         Callback = function(value) spawner.enabled = value == true end})
     if not correctGame then spawnToggle:Lock() end
     presetToggles.spawn = spawnToggle
@@ -2550,25 +3131,45 @@ do
             end
         end})
     presetToggles.noAfk = spawn:AddToggle({Name = "Stay off the AFK team", Default = false, Flag = "spawn_no_afk",
-        Description = "If the game marks you AFK, presses the afk button again to come back. The game decides when to mark you, so this can't stop it happening.",
+        Description = "If the game marks you AFK, presses the afk button again to come back.",
         Callback = function(value) spawner.noAfk = value == true end})
     ui.spawnStatus = spawn:AddLabel({Text = "off", Style = "Sub"})
 
     local night = farmTab:CreateSection("Overnight")
-    presetToggles.hop = night:AddToggle({Name = "Hop servers when there's nobody to fight", Default = false, Flag = "hop_enabled",
-        Description = "Joins another ABA server once the farm has had no target for a while. Set the rejoin loader in Misc so the hub comes back.",
+    presetToggles.hop = night:AddToggle({Name = "Hop when there's nobody to fight", Default = false, Flag = "hop_enabled",
+        Description = "Joins another server, picked from the game's server list, once the farm has had no target for a while.",
         Callback = function(value) hop.enabled = value == true end})
-    night:AddSlider({Name = "Wait before hopping", Min = 30, Max = 300, Default = 90, Increment = 10, Suffix = " s", Flag = "hop_after",
+    farmControls.hopAfter = night:AddSlider({Name = "Wait before hopping", Min = 30, Max = 300, Default = 90, Increment = 10, Suffix = " s", Flag = "hop_after",
         Callback = function(value) hop.after = tonumber(value) or 90 end})
+    presetToggles.skipJuggernaut = night:AddToggle({Name = "Skip Juggernaut servers", Default = false, Flag = "hop_skip_juggernaut",
+        Description = "Leaves a server as soon as it's playing Juggernaut, for one that has people in and isn't. Hops always pick a non-Juggernaut server.",
+        Callback = function(value) hop.skipJuggernaut = value == true end})
     ui.hopStatus = night:AddLabel({Text = "off", Style = "Sub"})
+
+    local BEST = {
+        targets = "Players", team = "Enemies only", goAfter = "Whoever is nearest", skipAfk = true, skipUlt = true,
+        moves = true, reach = 10, awaken = true, trade = true, smart = true,
+        sprint = true, dash = true, jump = true, lockCamera = true, aimMouse = false, hopAfter = 60,
+    }
+    local function applyBest()
+        for key, value in pairs(BEST) do
+            local element = farmControls[key]
+            if element then pcall(function() element:Set(value) end) end
+        end
+    end
+    night:AddButton({Name = "Best farm settings", ButtonText = "Apply", Callback = function()
+        applyBest()
+        pcall(function() BPUI:Notify({Title = "Auto Farm", Content = "Farm settings set to what works best. Nothing was switched on.", Duration = 4}) end)
+    end})
     night:AddButton({Name = "Set up for overnight", ButtonText = "Turn on", Callback = function()
-        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "noAfk", "hop", "bot"}) do
+        applyBest()
+        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "noAfk", "hop", "skipJuggernaut", "bot"}) do
             local element = presetToggles[key]
             if element then pcall(function() element:Set(true) end) end
         end
         pcall(function()
-            BPUI:Notify({Title = "Overnight", Content = rejoin.loader ~= "" and "Farm, auto spawn, auto block, anti-AFK, rejoin and server hop are on."
-                or "All on. Paste your loader in Misc > Server so it comes back after a rejoin or hop.", Duration = 5})
+            BPUI:Notify({Title = "Overnight", Content = rejoin.loader ~= "" and "Best farm settings, plus farm, auto spawn, auto block, anti-AFK, rejoin, server hop and Juggernaut skip are on."
+                or "All on. If the hub doesn't come back after a hop, paste your loader in Misc > Server.", Duration = 5})
         end)
     end})
 end
@@ -2757,6 +3358,31 @@ local function refreshPlayerInfo()
     ui.playerCount:Set(#list .. " players")
 end
 
+local skillsTab = window:CreateTab({Name = "Skills", Icon = "sparkles"})
+do
+    local main = skillsTab:CreateSection("Move sweeps")
+    local sweepToggle = addToggle(main, {Name = "Move sweeps", Default = false, Flag = "sweeps_enabled",
+        Description = "After you use one of the moves below, its projectile is walked through every target in range, nearest first.",
+        Callback = function(value) sweeps.enabled = value == true and correctGame end})
+    if not correctGame then sweepToggle:Lock() end
+    main:AddKeybind({Name = "Keybind", Default = Enum.KeyCode.Home, Mode = "Press", Flag = "sweeps_key",
+        Callback = function() if alive and correctGame then sweepToggle:Set(not sweeps.enabled) end end})
+    teamDropdown(main, "sweeps_team", function(mode) sweeps.teamMode = mode end)
+    main:AddSlider({Name = "Range", Min = 25, Max = 600, Default = 250, Increment = 25, Suffix = " studs", Flag = "sweeps_range",
+        Callback = function(value) sweeps.range = tonumber(value) or 250 end})
+    main:AddSlider({Name = "Frames per target", Min = 2, Max = 12, Default = 6, Increment = 1, Flag = "sweeps_frames",
+        Description = "How long it stays on each target. More lands more reliably; fewer reaches more people before the move ends.",
+        Callback = function(value) sweeps.frames = tonumber(value) or 6 end})
+    ui.sweeps = main:AddLabel({Text = "off", Style = "Sub"})
+
+    local list = skillsTab:CreateSection("Moves")
+    for _, move in ipairs(sweeps.MOVES) do
+        list:AddToggle({Name = move.name, Default = true, Flag = "sweep_" .. move.key,
+            Callback = function(value) sweeps.on[move.key] = value == true end})
+    end
+    list:AddLabel({Text = "Yusuke's Spirit Gun and Krillin's kiblasts have their own in Characters. Accelerator's Quake can't be swept: the server does its damage.", Style = "Sub"})
+end
+
 local charactersTab = window:CreateTab({Name = "Characters", Icon = "users"})
 
 local function assistControls(section, config)
@@ -2821,11 +3447,11 @@ end
 do
     local section = charactersTab:CreateSection("Nanami: Ratio / 7:3")
     ui.nanami = assistControls(section, {name = "Auto hit", default = nanami.enabled,
-        flag = "nanami_hit", key = Enum.KeyCode.F6, locked = not supported,
+        flag = "nanami_hit", key = Enum.KeyCode.F6, locked = not correctGame,
         description = "Hits the timing bar on move 1 and the second 7:3.",
         get = function() return nanami.enabled end,
         callback = function(value)
-            nanami.enabled = value == true and supported and alive
+            nanami.enabled = value == true and correctGame and alive
             nanami.last = nanami.enabled and "waiting" or "off"
         end})
 end
@@ -3156,6 +3782,7 @@ task.spawn(function()
             ui.rejoin:Set(rejoin.last)
             ui.yusuke:Set((yusuke.enabled and yusuke.last or "off") .. "  |  shots: " .. yusuke.shots)
             ui.krillin:Set((krillin.enabled and krillin.last or "off") .. "  |  volleys: " .. krillin.volleys)
+            ui.sweeps:Set((sweeps.enabled and sweeps.last or "off") .. "  |  casts: " .. sweeps.casts .. "  |  hits: " .. sweeps.hits)
 
             if tabOpen(playerInfoTab) then refreshPlayerInfo() end
         end)

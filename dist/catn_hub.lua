@@ -1,4 +1,4 @@
--- catn hub v1.13.0
+-- catn hub v1.13.1
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -441,7 +441,6 @@ local ICONS = {
     ["eye-off"] = "rbxassetid://135928786788378",
     ["fish"] = "rbxassetid://124360663785796",
     ["flag"] = "rbxassetid://78183383236196",
-    ["flame"] = "rbxassetid://98218034436456",
     ["gamepad-2"] = "rbxassetid://92483947987410",
     ["gauge"] = "rbxassetid://110273524101447",
     ["ghost"] = "rbxassetid://113822048130017",
@@ -459,11 +458,11 @@ local ICONS = {
     ["minus"] = "rbxassetid://118026365011536",
     ["monitor"] = "rbxassetid://72664649203050",
     ["moon"] = "rbxassetid://83380517901735",
+    ["mouse"] = "rbxassetid://73096068864710",
     ["mouse-pointer-2"] = "rbxassetid://117093892862228",
     ["music"] = "rbxassetid://113343203848535",
     ["panel-left"] = "rbxassetid://97419752870313",
     ["percent"] = "rbxassetid://130155041032013",
-    ["play"] = "rbxassetid://135609604299893",
     ["plug-zap"] = "rbxassetid://74506269884055",
     ["power"] = "rbxassetid://96479131758775",
     ["refresh-cw"] = "rbxassetid://138133190015277",
@@ -472,10 +471,10 @@ local ICONS = {
     ["settings"] = "rbxassetid://80758916183665",
     ["shield"] = "rbxassetid://110987169760162",
     ["shield-check"] = "rbxassetid://87354736164608",
-    ["shield-off"] = "rbxassetid://133426959132690",
     ["shuffle"] = "rbxassetid://132382786975101",
     ["siren"] = "rbxassetid://134210267818039",
     ["sliders-horizontal"] = "rbxassetid://85538382643347",
+    ["sparkles"] = "rbxassetid://138635884129147",
     ["sun-moon"] = "rbxassetid://75752898854559",
     ["swords"] = "rbxassetid://81872698913435",
     ["table"] = "rbxassetid://109109148250737",
@@ -3591,7 +3590,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.13.0"
+    local version = o.Version or "1.13.1"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3770,7 +3769,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.13.0"
+local HUB_VERSION = "1.13.1"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -3781,7 +3780,7 @@ local GAMES = {
         Name = "Anime Battle Arena",
         Key = "aba",
         Icon = "swords",
-        Version = "1.5.6",
+        Version = "1.6.0",
         Detect = function() return game.GameId == 578392296 or game.PlaceId == 1458767429 end,
     },
     {
