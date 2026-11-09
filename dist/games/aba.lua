@@ -392,22 +392,31 @@ do
             task.wait(0.03)
             vim:SendMouseButtonEvent(x, y, 0, false, game, 0)
         end,
+
         touch = function(x, y)
             local vim = game:GetService("VirtualInputManager")
-            vim:SendTouchEvent(1, 0, x, y)
+            vim:SendTouchEvent(37, 0, x, y)
             task.wait(0.03)
-            vim:SendTouchEvent(1, 2, x, y)
+            vim:SendTouchEvent(37, 2, x, y)
         end,
         native = function()
             if type(mouse1click) ~= "function" then error("no mouse1click") end
             mouse1click()
         end,
     }
-    local tapOrder = {"mouse", "touch", "native"}
-    local lastTap = 0
+
+    local touchDevice = UIS.TouchEnabled and not UIS.KeyboardEnabled and not UIS.MouseEnabled
+    local tapOrder = touchDevice and {"touch", "mouse", "native"} or {"mouse", "touch", "native"}
+    nanami.tapOrder = tapOrder
+    nanami.touchDevice = touchDevice
+
+    local latency = {mouse = 1, touch = 2, native = 1}
+    nanami.latency = latency
+    local frameCount, lastTapFrame = 0, -1
+    connect(RunService.Heartbeat, function() frameCount = frameCount + 1 end)
     connect(UIS.InputBegan, function(input)
         local kind = input.UserInputType
-        if kind == Enum.UserInputType.MouseButton1 or kind == Enum.UserInputType.Touch then lastTap = os.clock() end
+        if kind == Enum.UserInputType.MouseButton1 or kind == Enum.UserInputType.Touch then lastTapFrame = frameCount end
     end)
 
     local function tap()
@@ -415,11 +424,13 @@ do
         local size = cam and cam.ViewportSize or Vector2.new(800, 600)
         local tried = {}
         for i, way in ipairs(tapOrder) do
-            local started = os.clock()
-            local sent, why = pcall(tapWays[way], size.X / 2, size.Y / 2)
+            local sentFrame = frameCount
+            local sent, why = pcall(tapWays[way], size.X / 2, size.Y * 0.4)
             if sent then
-                while lastTap < started and os.clock() - started < 0.06 do task.wait() end
-                if lastTap >= started then
+
+                while lastTapFrame < sentFrame and frameCount - sentFrame < 4 do RunService.Heartbeat:Wait() end
+                if lastTapFrame >= sentFrame then
+                    latency[way] = math.clamp(lastTapFrame - sentFrame, 0, 4)
 
                     table.remove(tapOrder, i)
                     table.insert(tapOrder, 1, way)
@@ -432,35 +443,68 @@ do
         return false, table.concat(tried, "; ")
     end
 
-    local TARGET = 0.7
+    local TARGET, WINDOW, MARGIN = 0.7, 0.02, 0.004
     local current, clicked = nil, setmetatable({}, {__mode = "k"})
-    local windows = setmetatable({}, {__mode = "k"})
+    local lastX = setmetatable({}, {__mode = "k"})
+    local waits = setmetatable({}, {__mode = "k"})
+    local function inside(x) return math.abs(TARGET - x) < WINDOW - MARGIN end
     local function aiming()
         local character = player.Character
         return character ~= nil and character:GetAttribute("NANAMIAIM") == true
     end
+
+    local seenAt = setmetatable({}, {__mode = "k"})
     connect(workspace.DescendantAdded, function(descendant)
-        if descendant.Name == "NanamiCutGUI" and nanami.enabled and aiming() then current = descendant end
+        if descendant.Name == "NanamiCutGUI" and nanami.enabled then
+            current = descendant
+            seenAt[descendant] = os.clock()
+        end
     end)
     connect(RunService.Heartbeat, function()
         local gui = current
         if not gui then return end
-        if not alive or not nanami.enabled or not correctGame or not gui.Parent or clicked[gui] or not aiming() then
+        if not alive or not nanami.enabled or not correctGame or not gui.Parent or clicked[gui] then
             if not gui.Parent then current = nil end
+            return
+        end
+        if not aiming() then
+            if os.clock() - (seenAt[gui] or 0) > 0.5 then current = nil end
             return
         end
         local cutter = gui:FindFirstChild("MainBar") and gui.MainBar:FindFirstChild("Cutter")
         if not cutter then return end
         hideWindow()
         local x = cutter.Position.X.Scale
-        windows[gui] = windows[gui] or (0.004 + math.random() * 0.012)
-        if math.abs(TARGET - x) > windows[gui] then return end
+        local prev = lastX[gui]
+        lastX[gui] = x
+        nanami.trace = nanami.trace or {}
+        if not prev then table.clear(nanami.trace) end
+        table.insert(nanami.trace, math.floor(x * 1000 + 0.5) / 1000)
+        if not prev then return end
+        if x > TARGET + WINDOW then
+            clicked[gui] = true
+            nanami.last = string.format("missed: the bar jumped past (%.3f after %.3f)", x, prev)
+            return
+        end
+        local step = math.max(0, x - prev)
+        local judged = (latency[tapOrder[1]] or 2) - 2
+        local function at(n) return x + step * n end
+
+        local leaving = not inside(at(judged + 1))
+        if not inside(at(judged)) then
+
+            if not (at(judged + 1) > TARGET and math.abs(TARGET - at(judged)) < WINDOW - 0.001) then return end
+        end
+        if not leaving and not inside(at(judged - 1)) then return end
+
+        waits[gui] = waits[gui] or math.random(0, 2)
+        if not leaving and waits[gui] > 0 and inside(at(judged + 2)) then waits[gui] = waits[gui] - 1 return end
         clicked[gui] = true
         if UIS:GetFocusedTextBox() then nanami.last = "skipped (typing)" return end
         if not rollHit("nanami") then nanami.last = "left to you (hit chance)" return end
         task.spawn(function()
             local ok, how = tap()
-            if ok then nanami.hits = nanami.hits + 1 nanami.last = string.format("hit at %.3f (%s)", x, how)
+            if ok then nanami.hits = nanami.hits + 1 nanami.last = string.format("tapped at %.3f (%s, %d frame delay)", x, how, latency[how] or -1)
             else nanami.last = "tap failed: " .. how end
         end)
     end)
@@ -2995,7 +3039,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.6.0",
+    return BPUI:CreateWindow({Version = "1.6.1",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",

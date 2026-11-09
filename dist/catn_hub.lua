@@ -3780,7 +3780,7 @@ local GAMES = {
         Name = "Anime Battle Arena",
         Key = "aba",
         Icon = "swords",
-        Version = "1.6.0",
+        Version = "1.6.1",
         Detect = function() return game.GameId == 578392296 or game.PlaceId == 1458767429 end,
     },
     {
