@@ -3867,7 +3867,10 @@ do
                 or before[part].UpVector:Dot(part.CFrame.UpVector) < 0.99999
             local touch = part:FindFirstChildOfClass("TouchTransmitter") ~= nil
             if moved and (touch or part.CanCollide) then
-                movers[#movers + 1] = {part = part, last = part.CFrame, at = os.clock(), omega = Vector3.zero, vel = Vector3.zero}
+
+                local axis, angle = before[part]:ToObjectSpace(part.CFrame):ToAxisAngle()
+                movers[#movers + 1] = {part = part, last = part.CFrame, at = os.clock(), omega = Vector3.zero, vel = Vector3.zero,
+                    spinAxis = angle > 0.001 and before[part]:VectorToWorldSpace(axis) or nil}
             elseif touch and not SAFE_TOUCH[part.Name] then
                 statics[#statics + 1] = part
             elseif part.CanCollide and part.Name ~= "BLOCKER" then
@@ -3957,6 +3960,32 @@ do
                 if #cells > 40000 then break end
             end
         end
+
+        for _, m in ipairs(movers) do
+            if m.spinAxis then
+                local part = m.part
+                local center = part.Position
+                local reach = math.max(part.Size.X, part.Size.Y, part.Size.Z) / 2 + 3
+                local h = part.Size / 2
+                for _, cell in ipairs(cells) do
+                    if math.abs(cell.x - center.X) <= reach and math.abs(cell.z - center.Z) <= reach and math.abs(cell.y - center.Y) <= reach + 6 then
+                        local hits = 0
+                        for step = 0, 23 do
+                            local cf = CFrame.fromAxisAngle(m.spinAxis, math.rad(step * 15)) * (part.CFrame - center) + center
+                            for _, up in ipairs({1, 3, 5}) do
+                                local rel = cf:PointToObjectSpace(Vector3.new(cell.x, cell.y + up, cell.z))
+                                if math.abs(rel.X) <= h.X + 1.5 and math.abs(rel.Y) <= h.Y + 1.5 and math.abs(rel.Z) <= h.Z + 1.5 then
+                                    hits = hits + 1
+                                    break
+                                end
+                            end
+                        end
+                        cell.danger = math.max(cell.danger or 0, hits / 24)
+                    end
+                end
+                task.wait()
+            end
+        end
         return #cells > 0 and #goalCells > 0
     end
 
@@ -4022,7 +4051,7 @@ do
             for _, n in ipairs(cellsAt(cell.ix + d[1], cell.iz + d[2]) or {}) do
 
                 if math.abs(n.y - cell.y) < 1.6 or (cell.ramp and n.part == cell.part and math.abs(n.y - cell.y) < 5) then
-                    out[#out + 1] = {to = n, kind = "walk", cost = diag and CELL * 1.42 or CELL}
+                    out[#out + 1] = {to = n, kind = "walk", cost = (diag and CELL * 1.42 or CELL) + (n.danger or 0) * 30}
                 end
             end
 
@@ -4048,18 +4077,45 @@ do
                             end
                             if kind == "double" and not arcClear(cell, n, true) then kind = nil end
                             if kind then
-                                out[#out + 1] = {to = n, kind = kind, cost = dist + (kind == "jump" and 3 or 6)}
-                                landed = true
+                                out[#out + 1] = {to = n, kind = kind, cost = dist + (kind == "jump" and 3 or 6) + (n.danger or 0) * 30}
+
+                                if dy > -1.6 then landed = true end
                             end
                         elseif not needsJump and math.abs(dy) < 1.6 then
                             landed = true
                         end
+                    end
+
+                    if not landed then
+                        local level = false
+                        for _, n in ipairs(list) do if math.abs(n.y - cell.y) < 1.6 then level = true break end end
+                        if not level then gap = true end
                     end
                 end
                 if landed then break end
             end
         end
         return out
+    end
+
+    local function closestReachable(start)
+        local seen, queue, qi = {[start] = true}, {start}, 1
+        local target = won.Position
+        local best, bestD = start, math.huge
+        while qi <= #queue and qi < 25000 do
+            local c = queue[qi]
+            qi = qi + 1
+            local d = math.sqrt((c.x - target.X) ^ 2 + (c.z - target.Z) ^ 2) + math.abs(c.y + 3 - (target.Y - won.Size.Y / 2)) * 2
+            if d < bestD then best, bestD = c, d end
+            for _, link in ipairs(links(c)) do
+                if not seen[link.to] then
+                    seen[link.to] = true
+                    queue[#queue + 1] = link.to
+                end
+            end
+            if qi % 400 == 0 then task.wait() end
+        end
+        return best
     end
 
     local function plan(start)
@@ -4194,6 +4250,7 @@ do
         local i = 1
         local legStart = os.clock()
         local lastPos = nil
+        local stuckPos, stuckAt, stuckJumped = nil, os.clock(), false
         while i <= #path do
             if not obby.enabled or not alive or not map.Parent then return "stop" end
             local root = Game.ownRoot()
@@ -4215,10 +4272,15 @@ do
                 local aim = Vector3.new(far.x, far.y, far.z)
                 local gap = flat(aim - root.Position)
 
-                local nextSpot = root.Position + (gap.Magnitude > 0.1 and gap.Unit or Vector3.zero) * 3
-                if dangerAt(nextSpot, link.to.y, 0.55) then
+                local dir = gap.Magnitude > 0.1 and gap.Unit or Vector3.zero
+                local risky = false
+                for _, ahead in ipairs({3, 5, 7}) do
+                    if dangerAt(root.Position + dir * ahead, link.to.y, 0.35 + ahead * 0.08) then risky = true break end
+                end
+                if risky then
                     obby.waits = obby.waits + 1
                     obby.last = "waiting for a moving hazard"
+                    stuckPos = nil
                     if dangerAt(root.Position, link.to.y, 0.35) then
                         moveDir = gap.Magnitude > 0.1 and -gap.Unit or Vector3.zero
                     else
@@ -4228,6 +4290,15 @@ do
                 else
                     obby.last = ("running (%d steps left)"):format(#path - i + 1)
                     moveDir = gap.Magnitude > 0.1 and gap.Unit or Vector3.zero
+
+                    if not stuckPos or (root.Position - stuckPos).Magnitude > 2 then
+                        stuckPos, stuckAt, stuckJumped = root.Position, os.clock(), false
+                    elseif os.clock() - stuckAt > 3 then
+                        return "replan"
+                    elseif os.clock() - stuckAt > 1.5 and not stuckJumped and grounded(root) then
+                        stuckJumped = true
+                        jump(false)
+                    end
 
                     for k = j, i, -1 do
                         local c = path[k].to
@@ -4312,10 +4383,31 @@ do
                     local start = cellNear(root.Position)
                     local path = start and plan(start)
                     attempts = attempts + 1
+                    local partial = false
+                    if not path and start then
+
+                        local best = closestReachable(start)
+                        local there = best and math.abs(best.x - start.x) + math.abs(best.z - start.z) <= 4 and math.abs(best.y - start.y) < 2
+                        if best and not there then
+                            local saved = goalCells
+                            goalCells = {best}
+                            best.goal = true
+                            path = plan(start)
+                            best.goal = nil
+                            goalCells = saved
+                            partial = path ~= nil
+                        elseif there then
+                            obby.last = "as far as it can get (the rest needs moves, not jumps)"
+                            moveDir = Vector3.zero
+                            while obby.enabled and alive and map.Parent do task.wait(0.5) end
+                            break
+                        end
+                    end
                     if not path then
                         obby.last = "no way to the finish from here"
                         task.wait(0.5)
                     else
+                        if partial then obby.partial = true end
                         local result = follow(path, map)
                         moveDir = Vector3.zero
                         if result == "stop" then break end
@@ -4602,7 +4694,8 @@ do
         return {
             username = "Catn Hub",
             embeds = {{
-                title = title or ("Farm report · " .. duration(secs)),
+
+                title = (title or ("Farm report · " .. duration(secs))) .. " · " .. player.Name,
                 color = 0x8F70EC,
                 fields = fields,
                 footer = {text = ("Anime Battle Arena · %d servers · %d hops"):format(night.servers or 1, night.hops or 0)},
@@ -4614,6 +4707,7 @@ do
     function webhook.Event(text, color)
         if not (webhook.enabled and webhook.events) then return end
         task.spawn(post, {username = "Catn Hub", embeds = {{description = text, color = color or 0x8F70EC,
+            footer = {text = player.Name},
             timestamp = DateTime.now():ToIsoDate()}}})
     end
     function webhook.SendNow(title) return post(webhook.Stats(title)) end
@@ -4723,7 +4817,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.9.0",
+    return BPUI:CreateWindow({Version = "1.9.1",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
