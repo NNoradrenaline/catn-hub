@@ -4261,6 +4261,7 @@ do
                 return "replan"
             end
             lastPos = root.Position
+            obby.lastSeen = root.Position
             trackMovers()
             local link = path[i]
             local target = Vector3.new(link.to.x, link.to.y, link.to.z)
@@ -4416,6 +4417,12 @@ do
             end
         end)
         if not ok then obby.last = "stopped: " .. tostring(err) end
+
+        if not map.Parent and won and obby.lastSeen and inBox(won, obby.lastSeen, 6, 6)
+            and not tostring(obby.last):find("^finished") then
+            obby.finishes = obby.finishes + 1
+            obby.last = "finished"
+        end
         logResult("course", map, runStarted)
         moveDir = Vector3.zero
         obby.active = false
@@ -4435,6 +4442,7 @@ do
         obby.runs = obby.runs + 1
         bind()
         local runStarted = os.clock()
+        local rounds = 0
         local ok, err = pcall(function()
             local indicator = map:FindFirstChild("Indicator", true)
             local started = os.clock()
@@ -4443,6 +4451,7 @@ do
                 if tile:IsA("BasePart") and tile.Name == "Tile" then floorY = math.min(floorY or math.huge, tile.Position.Y - tile.Size.Y / 2) end
             end
             obby.fell = false
+            local wasMixed = false
             while obby.enabled and alive and map.Parent and indicator and indicator.Parent and os.clock() - started < 240 do
                 local root = Game.ownRoot()
                 if root and floorY and root.Position.Y < floorY - 4 then obby.fell = true end
@@ -4456,14 +4465,26 @@ do
                 else
                     local want = indicatorColor(indicator)
                     local best, bestD
+
+                    local sum, count, first, mixed = Vector3.zero, 0, nil, false
                     for _, tile in ipairs(map:GetDescendants()) do
-                        if tile:IsA("BasePart") and tile.Name == "Tile" and tile.CanCollide and tile.Transparency < 0.9
-                            and colorGap(tile.Color, want) < 0.08 then
-                            local d = flat(tile.Position - root.Position).Magnitude
-                            if not bestD or d < bestD then best, bestD = tile, d end
+                        if tile:IsA("BasePart") and tile.Name == "Tile" then
+                            sum, count = sum + tile.Position, count + 1
+                            if not first then first = tile.Color elseif colorGap(first, tile.Color) > 0.08 then mixed = true end
+                            if tile.CanCollide and tile.Transparency < 0.9 and colorGap(tile.Color, want) < 0.08 then
+                                local d = flat(tile.Position - root.Position).Magnitude
+                                if not bestD or d < bestD then best, bestD = tile, d end
+                            end
                         end
                     end
-                    if best then
+                    pcall(setSprint, true)
+                    if mixed and not wasMixed and not obby.fell then rounds = rounds + 1 end
+                    wasMixed = mixed
+                    if not mixed and count > 0 then
+                        local centre = flat(sum / count - root.Position)
+                        moveDir = centre.Magnitude > 1.5 and centre.Unit or Vector3.zero
+                        obby.last = ("waiting in the middle for the colour (%d studs away)"):format(math.floor(centre.Magnitude))
+                    elseif best then
                         local to = flat(best.Position - root.Position)
 
                         moveDir = to.Magnitude > math.min(best.Size.X, best.Size.Z) * 0.15 and to.Unit or Vector3.zero
@@ -4477,7 +4498,9 @@ do
             end
         end)
         if not ok then obby.last = "stopped: " .. tostring(err) end
-        if obby.fell then obby.last = "fell off (" .. obby.last .. ")" else obby.last = "stayed on to the end" end
+        if obby.fell then obby.last = ("out after %d rounds (%s)"):format(rounds, obby.last)
+        else obby.last = ("stayed on to the end (%d rounds)"):format(rounds) end
+        pcall(setSprint, false)
         logResult("colours", map, runStarted)
         moveDir = Vector3.zero
         obby.active = false
@@ -4817,7 +4840,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.9.1",
+    return BPUI:CreateWindow({Version = "1.9.2",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
