@@ -12,6 +12,8 @@ if type(getgenv) == "function" then
     if ok and type(value) == "table" then env = value end
 end
 local KEY = "__BP_HUB_ABA"
+
+local RUN_ID = tostring(math.floor(os.clock() * 1000) % 1000000000)
 for _, key in ipairs({KEY, "__ABA_BLACK_FLASH_BPUI_V1", "__ABA_SPIRIT_GUN_ALL_TARGETS"}) do
     local previous = env[key]
     if type(previous) == "table" and type(previous.Destroy) == "function" then pcall(previous.Destroy) end
@@ -1366,8 +1368,8 @@ state.Bot = bot
 do
     local PathfindingService = game:GetService("PathfindingService")
     local CollectionService = game:GetService("CollectionService")
-    local RENDER = "CatnAutoFarm"
-    local CAMERA = "CatnAutoFarmCamera"
+    local RENDER = "CatnAutoFarm" .. RUN_ID
+    local CAMERA = "CatnAutoFarmCamera" .. RUN_ID
     local lockRoot = nil
     local moveDir = Vector3.zero
     local hazards, hazardsReady = {}, false
@@ -1473,7 +1475,11 @@ do
 
     local function cost(dummy, from)
         local distance = (dummy.root.Position - from).Magnitude + (bot.learn and brain.PlayerCost(dummy.player) or 0)
-        if bot.targetMode == "nearest" then return distance end
+        if bot.targetMode == "nearest" then
+
+            local hp = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
+            return distance - (hp < 0.35 and 12 or 0)
+        end
         local speed = (dummy.root.AssemblyLinearVelocity * Vector3.new(1, 0, 1)).Magnitude
         local health = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
         return distance + speed * 0.6 + health * 15 + (Game.isBlocking(dummy.model) and 10 or 0)
@@ -1911,7 +1917,9 @@ do
         return math.min(best + 1, #waypoints)
     end
 
+    local bind
     local function loop()
+        local stillSince = nil
         local path, index, pathTarget, pathAt, pathFrom = nil, 1, nil, 0, nil
         local clear, clearAt = false, 0
         local lastNearestCheck = 0
@@ -1925,6 +1933,17 @@ do
         while bot.enabled and alive do
             bot.beat = os.clock()
             local rootPart, humanoid = Game.ownRoot()
+
+            if humanoid and moveDir.Magnitude > 0 and humanoid.MoveDirection.Magnitude < 0.01 and humanoid.WalkSpeed > 0 then
+                stillSince = stillSince or os.clock()
+                if os.clock() - stillSince > 2 then
+                    stillSince = nil
+                    bot.rebinds = (bot.rebinds or 0) + 1
+                    bind()
+                end
+            else
+                stillSince = nil
+            end
             if not rootPart then
                 moveDir = Vector3.zero
                 bot.last = "waiting to respawn"
@@ -1943,7 +1962,7 @@ do
             elseif state.Obby and state.Obby.active then
                 moveDir = Vector3.zero
                 setSprint(false)
-                bot.last = "minigame: obby autoplay is running"
+                bot.last = "a minigame is on, Play minigames is playing it"
                 task.wait(0.3)
             elseif bot.targets == "Dummies" and not solo() then
                 moveDir = Vector3.zero
@@ -1964,8 +1983,8 @@ do
                         lastNearestCheck = os.clock()
                         local best = pickTarget(rootPart.Position)
                         if best and best.model ~= pathTarget.model then
-                            local current = (pathTarget.root.Position - rootPart.Position).Magnitude
-                            local other = (best.root.Position - rootPart.Position).Magnitude
+                            local current = math.max(cost(pathTarget, rootPart.Position), 0)
+                            local other = math.max(cost(best, rootPart.Position), 0)
 
                             local hp = pathTarget.humanoid.Health / math.max(pathTarget.humanoid.MaxHealth, 1)
                             local engaged = os.clock() - (damagedAt[pathTarget.model] or -math.huge) < 2.5 or hp < 0.35
@@ -2230,7 +2249,7 @@ do
         end
     end
 
-    local function bind()
+    bind = function()
         pcall(function() RunService:UnbindFromRenderStep(CAMERA) end)
 
         RunService:BindToRenderStep(CAMERA, Enum.RenderPriority.Camera.Value + 1, lockOn)
@@ -3420,12 +3439,15 @@ connect(player.Idled, function()
     end)
 end)
 
-local spawner = {enabled = false, character = "", noAfk = false, quests = false, last = "off"}
+local spawner = {enabled = false, character = "", noAfk = false, quests = false, last = "off", failed = {}}
 state.Spawner = spawner
 do
 
-    local LAST_FILE = "BPHubABA/last_character.txt"
-    pcall(function() if isfile(LAST_FILE) then spawner.lastSpawned = readfile(LAST_FILE) end end)
+    local LAST_FILE = "BPHubABA/last_character_" .. tostring(player.UserId) .. ".txt"
+    pcall(function()
+        if isfile(LAST_FILE) then spawner.lastSpawned = readfile(LAST_FILE)
+        elseif isfile("BPHubABA/last_character.txt") then spawner.lastSpawned = readfile("BPHubABA/last_character.txt") end
+    end)
     local function rememberCharacter(name)
         if type(name) ~= "string" or name == "" or name == spawner.lastSpawned then return end
         spawner.lastSpawned = name
@@ -3457,8 +3479,10 @@ do
         local names, seen = {}, {}
         if holder then
             for _, button in ipairs(holder:GetDescendants()) do
+
                 if button:IsA("ImageButton") and button.Name ~= "Icon" and not seen[button.Name]
-                    and not button:GetAttribute("TestPlaceOnly") then
+                    and not button:GetAttribute("TestPlaceOnly") and button.ImageColor3.R > 0.5
+                    and os.clock() > (spawner.failed[button.Name] or 0) then
                     seen[button.Name] = true
                     names[#names + 1] = button.Name
                 end
@@ -3484,6 +3508,11 @@ do
     local function pick()
         local wanted = spawner.character:lower():gsub("^%s+", ""):gsub("%s+$", "")
         local names = spawner.Characters()
+
+        if #names == 0 and next(spawner.failed) then
+            table.clear(spawner.failed)
+            names = spawner.Characters()
+        end
         if spawner.quests then
             local questChar = spawner.QuestCharacter()
             if questChar then
@@ -3492,16 +3521,19 @@ do
                 for _, name in ipairs(names) do if name:lower():sub(1, #q) == q then return name end end
             end
         end
-        if wanted == "" then
+        local function fallback()
 
             local last = player:GetAttribute("LastLoadedChar")
-            if last and last ~= "" then return last end
+            if #names == 0 then return last ~= "" and last or nil end
+            for _, name in ipairs(names) do if name == last then return name end end
             for _, name in ipairs(names) do if name == spawner.lastSpawned then return name end end
             return names[1]
         end
+        if wanted == "" then return fallback() end
         for _, name in ipairs(names) do if name:lower() == wanted then return name end end
         for _, name in ipairs(names) do if name:lower():sub(1, #wanted) == wanted then return name end end
-        return nil
+
+        return fallback()
     end
     spawner.Pick = pick
 
@@ -3560,7 +3592,21 @@ do
                     elseif os.clock() - lobbySince > 1 and os.clock() - pressedAt > 4 then
 
                         pressedAt = os.clock()
-                        spawner.last = "spawning as " .. name
+
+                        local roundOn = workspace:GetAttribute("GameMode") ~= nil
+                        if not roundOn then
+                            spawner.tries = nil
+                        elseif spawner.tries and spawner.tries.name == name then
+                            spawner.tries.count = spawner.tries.count + 1
+                        else
+                            spawner.tries = {name = name, count = 1}
+                        end
+                        if spawner.tries and spawner.tries.count > 3 then
+                            spawner.failed[name] = os.clock() + 600
+                            spawner.tries = nil
+                            name = pick() or name
+                        end
+                        spawner.last = (roundOn and "spawning as " or "waiting for the round to start, then ") .. name
                         spawner.openedMenu = true
                         remote:FireServer("CharacterOpen")
                         task.wait(0.35)
@@ -3571,6 +3617,7 @@ do
                 else
                     lobbySince = nil
                     spawner.openedMenu = false
+                    spawner.tries = nil
                     spawner.last = "in a match"
                     rememberCharacter(player:GetAttribute("LastLoadedChar"))
                 end
@@ -3735,7 +3782,7 @@ do
     local G, V1, V2, T2 = 90, 37.2, 40, 0.3
     local SPEED = 15
     local CELL = 2
-    local RENDER = "CatnObby"
+    local RENDER = "CatnObby" .. RUN_ID
     local SAFE_TOUCH = {Won = true, Check = true, CoinSpawner = true, Coin = true, Spawn = true}
     local moveDir = Vector3.zero
 
@@ -3749,27 +3796,6 @@ do
         local disc = V2 * V2 - 2 * G * (dy - h1)
         if disc < 0 then return nil end
         return T2 + (V2 + math.sqrt(disc)) / G
-    end
-
-    local function topOf(part)
-        local cf, size = part.CFrame, part.Size
-        local axes = {{cf.RightVector, size.X}, {cf.UpVector, size.Y}, {cf.LookVector, size.Z}}
-        local up, upIndex = 0, nil
-        for i, a in ipairs(axes) do
-            local d = math.abs(a[1].Y)
-            if d > up then up, upIndex = d, i end
-        end
-        if up < 0.95 then return nil end
-        local others = {}
-        for i, a in ipairs(axes) do if i ~= upIndex then others[#others + 1] = a end end
-        return {part = part, y = part.Position.Y + axes[upIndex][2] / 2,
-            c = Vector3.new(part.Position.X, 0, part.Position.Z),
-            ax = Vector3.new(others[1][1].X, 0, others[1][1].Z).Unit, hx = others[1][2] / 2,
-            az = Vector3.new(others[2][1].X, 0, others[2][1].Z).Unit, hz = others[2][2] / 2}
-    end
-    local function onTop(t, x, z, inset)
-        local rel = Vector3.new(x - t.c.X, 0, z - t.c.Z)
-        return math.abs(rel:Dot(t.ax)) <= t.hx - inset and math.abs(rel:Dot(t.az)) <= t.hz - inset
     end
 
     local function inBox(part, point, grow, growUp)
@@ -3786,7 +3812,8 @@ do
                     local rx, ry, rz = d.CFrame:ToOrientation()
                     parts[#parts + 1] = {n = d.Name, p = {d.Position.X, d.Position.Y, d.Position.Z},
                         s = {d.Size.X, d.Size.Y, d.Size.Z}, r = {math.deg(rx), math.deg(ry), math.deg(rz)},
-                        c = d.CanCollide, t = d:FindFirstChildOfClass("TouchTransmitter") ~= nil, tr = d.Transparency}
+                        c = d.CanCollide, t = d:FindFirstChildOfClass("TouchTransmitter") ~= nil, tr = d.Transparency,
+                        k = d.ClassName, sh = d:IsA("Part") and d.Shape.Name or nil, col = {math.floor(d.Color.R * 255), math.floor(d.Color.G * 255), math.floor(d.Color.B * 255)}}
                 end
             end
             local message = game:GetService("ReplicatedStorage"):FindFirstChild("GameMessage")
@@ -3798,7 +3825,23 @@ do
         end)
     end
 
+    local function logResult(kind, map, started)
+        pcall(function()
+            local message = game:GetService("ReplicatedStorage"):FindFirstChild("GameMessage")
+            local file = "BPHubABA/minigames/results.txt"
+            local line = ("%s  %s  %s  %.0fs  jumps %d  resets %d  [%s]\n"):format(os.date("%m-%d %H:%M"), kind,
+                obby.last, os.clock() - started, obby.jumps, obby.resets or 0, message and tostring(message.Value) or "?")
+            if not isfolder("BPHubABA/minigames") then makefolder("BPHubABA/minigames") end
+            if type(appendfile) == "function" and isfile(file) then appendfile(file, line)
+            else writefile(file, (isfile(file) and readfile(file) or "") .. line) end
+        end)
+    end
+
     local grid, cells, goalCells, movers, statics, won = nil, nil, nil, nil, nil, nil
+    local arcParams = RaycastParams.new()
+    arcParams.FilterType = Enum.RaycastFilterType.Include
+    arcParams.RespectCanCollide = true
+    local linkCache = setmetatable({}, {__mode = "k"})
     local function key(ix, iz) return ix * 100000 + iz end
 
     local function build(map)
@@ -3816,7 +3859,7 @@ do
         for _, part in ipairs(parts) do before[part] = part.CFrame end
         task.wait(0.12)
         movers, statics = {}, {}
-        local surfaces = {}
+        local solids = {}
         for _, part in ipairs(parts) do
             local moved = part.Name == "Spinner" or not part.Anchored
                 or (before[part].Position - part.Position).Magnitude > 0.01
@@ -3827,49 +3870,91 @@ do
                 movers[#movers + 1] = {part = part, last = part.CFrame, at = os.clock(), omega = Vector3.zero, vel = Vector3.zero}
             elseif touch and not SAFE_TOUCH[part.Name] then
                 statics[#statics + 1] = part
-            elseif part.CanCollide and not moved then
-                local t = topOf(part)
-                if t and t.hx >= 0.9 and t.hz >= 0.9 then surfaces[#surfaces + 1] = t end
+            elseif part.CanCollide and part.Name ~= "BLOCKER" then
+                solids[#solids + 1] = part
             end
         end
 
+        local overlap = OverlapParams.new()
+        overlap.FilterType = Enum.RaycastFilterType.Include
+        overlap.FilterDescendantsInstances = {map}
+        overlap.RespectCanCollide = true
+        local moverSet = {}
+        for _, m in ipairs(movers) do moverSet[m.part] = true end
+        movers.set = moverSet
+        arcParams.FilterDescendantsInstances = {map}
+        table.clear(linkCache)
+        local function roomAt(x, y, z, under)
+            local hits = workspace:GetPartBoundsInBox(CFrame.new(x, y + 3.1, z), Vector3.new(2.6, 5, 2.6), overlap)
+            for _, hit in ipairs(hits) do
+
+                if hit.Name ~= "BLOCKER" and not moverSet[hit] and hit ~= under then return false end
+            end
+            return true
+        end
+
         grid, cells, goalCells = {}, {}, {}
+        local lo, hi
+        for _, part in ipairs(solids) do
+            local half = part.Size.Magnitude / 2
+            if half < 300 then
+                local p = part.Position
+                lo = lo and Vector3.new(math.min(lo.X, p.X - half), math.min(lo.Y, p.Y - half), math.min(lo.Z, p.Z - half)) or p - Vector3.one * half
+                hi = hi and Vector3.new(math.max(hi.X, p.X + half), math.max(hi.Y, p.Y + half), math.max(hi.Z, p.Z + half)) or p + Vector3.one * half
+            end
+        end
+        if not lo then return false end
+        local _, me = Game.ownRoot()
+        local maxSlope = math.min(me and me.MaxSlopeAngle or 45, 75)
+        local minNormalY = math.cos(math.rad(maxSlope))
+        local down = RaycastParams.new()
+        down.FilterType = Enum.RaycastFilterType.Include
+        down.FilterDescendantsInstances = solids
+        down.RespectCanCollide = true
+        local x0, x1 = math.floor(lo.X / CELL), math.ceil(hi.X / CELL)
+        local z0, z1 = math.floor(lo.Z / CELL), math.ceil(hi.Z / CELL)
         local count = 0
-        for _, t in ipairs(surfaces) do
-            local r = math.sqrt(t.hx * t.hx + t.hz * t.hz)
-            local x0, x1 = math.floor((t.c.X - r) / CELL), math.ceil((t.c.X + r) / CELL)
-            local z0, z1 = math.floor((t.c.Z - r) / CELL), math.ceil((t.c.Z + r) / CELL)
-            for ix = x0, x1 do
-                for iz = z0, z1 do
-                    local x, z = ix * CELL, iz * CELL
-                    if onTop(t, x, z, 0.6) then
-                        local point = Vector3.new(x, t.y + 2, z)
+        for ix = x0, x1 do
+            for iz = z0, z1 do
+                local x, z = ix * CELL, iz * CELL
+                local fromY = hi.Y + 5
+                for _ = 1, 6 do
+                    local hit = workspace:Raycast(Vector3.new(x, fromY, z), Vector3.new(0, lo.Y - fromY - 1, 0), down)
+                    if not hit then break end
+                    local y = hit.Position.Y
+                    fromY = y - 0.05
+
+                    if hit.Normal.Y > minNormalY then
+                        local point = Vector3.new(x, y + 2, z)
                         local blocked = false
                         for _, h in ipairs(statics) do
-                            if inBox(h, point, 1.2, 2.5) then blocked = true break end
+
+                            if inBox(h, point, 2, 2.5) then blocked = true break end
                         end
 
+                        if not blocked and not roomAt(x, y, z, hit.Instance) then blocked = true end
                         if not blocked then
                             local list = grid[key(ix, iz)] or {}
-                            local cell = {ix = ix, iz = iz, x = x, z = z, y = t.y, surf = t, i = #cells + 1}
+                            local cell = {ix = ix, iz = iz, x = x, z = z, y = y, i = #cells + 1,
+                                part = hit.Instance, ramp = hit.Normal.Y < 0.98}
                             for _, other in ipairs(list) do
-                                if math.abs(other.y - t.y) < 3 then cell = nil break end
+                                if math.abs(other.y - y) < 3 then cell = nil break end
                             end
                             if cell then
                                 list[#list + 1] = cell
                                 grid[key(ix, iz)] = list
                                 cells[#cells + 1] = cell
-                                if inBox(won, Vector3.new(x, t.y + 2.5, z), 0.5, 1) then
+                                if inBox(won, Vector3.new(x, y + 2.5, z), 0.5, 1) then
                                     cell.goal = true
                                     goalCells[#goalCells + 1] = cell
                                 end
                             end
                         end
-                        count = count + 1
-                        if count % 4000 == 0 then task.wait() end
-                        if #cells > 40000 then break end
                     end
                 end
+                count = count + 1
+                if count % 400 == 0 then task.wait() end
+                if #cells > 40000 then break end
             end
         end
         return #cells > 0 and #goalCells > 0
@@ -3894,13 +3979,49 @@ do
         return best
     end
 
+    local function solidHit(from, to)
+        local result = workspace:Raycast(from, to - from, arcParams)
+        return result ~= nil and result.Instance.Name ~= "BLOCKER" and not (movers and movers.set and movers.set[result.Instance])
+    end
+    local function arcClear(cell, n, double)
+        local a, b = Vector3.new(cell.x, cell.y, cell.z), Vector3.new(n.x, n.y, n.z)
+        local flatGap = Vector3.new(b.X - a.X, 0, b.Z - a.Z)
+        local dist = flatGap.Magnitude
+        local dir = dist > 0.01 and flatGap.Unit or Vector3.zero
+        local h1 = V1 * T2 - 0.5 * G * T2 * T2
+        local function height(t)
+            if not double or t <= T2 then return V1 * t - 0.5 * G * t * t end
+            local u = t - T2
+            return h1 + V2 * u - 0.5 * G * u * u
+        end
+        local prev = a
+        local t = 0
+        while t < 2 do
+            t = t + 0.06
+            local y = height(t)
+            local p = a + dir * math.min(SPEED * t, dist) + Vector3.new(0, y, 0)
+
+            local falling = (double and t > T2 + V2 / G) or (not double and t > V1 / G)
+            if falling and p.Y <= b.Y then p = Vector3.new(p.X, b.Y, p.Z) end
+            for _, up in ipairs({0.7, 4.6}) do
+                if solidHit(prev + Vector3.new(0, up, 0), p + Vector3.new(0, up, 0)) then return false end
+            end
+            prev = p
+            if falling and p.Y <= b.Y then break end
+        end
+        return true
+    end
+
     local DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}}
     local function links(cell)
+        if linkCache[cell] then return linkCache[cell] end
         local out = {}
+        linkCache[cell] = out
         for _, d in ipairs(DIRS) do
             local diag = d[1] ~= 0 and d[2] ~= 0
             for _, n in ipairs(cellsAt(cell.ix + d[1], cell.iz + d[2]) or {}) do
-                if math.abs(n.y - cell.y) < 1.6 then
+
+                if math.abs(n.y - cell.y) < 1.6 or (cell.ramp and n.part == cell.part and math.abs(n.y - cell.y) < 5) then
                     out[#out + 1] = {to = n, kind = "walk", cost = diag and CELL * 1.42 or CELL}
                 end
             end
@@ -3921,6 +4042,11 @@ do
                             local kind
                             if t1 and SPEED * t1 >= dist + 1 then kind = "jump"
                             elseif t2 and SPEED * t2 >= dist + 1 then kind = "double" end
+
+                            if kind == "jump" and not arcClear(cell, n, false) then
+                                kind = (t2 and SPEED * t2 >= dist + 1) and "double" or nil
+                            end
+                            if kind == "double" and not arcClear(cell, n, true) then kind = nil end
                             if kind then
                                 out[#out + 1] = {to = n, kind = kind, cost = dist + (kind == "jump" and 3 or 6)}
                                 landed = true
@@ -4056,7 +4182,9 @@ do
             local p = from + offset * (k / steps)
             local list = cellsAt(math.floor(p.X / CELL + 0.5), math.floor(p.Z / CELL + 0.5))
             local ok = false
-            for _, c in ipairs(list or {}) do if math.abs(c.y - cell.y) < 1.6 then ok = true break end end
+            for _, c in ipairs(list or {}) do
+                if math.abs(c.y - cell.y) < 1.6 or (c.part == cell.part and c.ramp) then ok = true break end
+            end
             if not ok then return false end
         end
         return true
@@ -4065,10 +4193,17 @@ do
     local function follow(path, map)
         local i = 1
         local legStart = os.clock()
+        local lastPos = nil
         while i <= #path do
             if not obby.enabled or not alive or not map.Parent then return "stop" end
             local root = Game.ownRoot()
             if not root then return "replan" end
+
+            if lastPos and (root.Position - lastPos).Magnitude > 12 then
+                obby.resets = (obby.resets or 0) + 1
+                return "replan"
+            end
+            lastPos = root.Position
             trackMovers()
             local link = path[i]
             local target = Vector3.new(link.to.x, link.to.y, link.to.z)
@@ -4094,9 +4229,12 @@ do
                     obby.last = ("running (%d steps left)"):format(#path - i + 1)
                     moveDir = gap.Magnitude > 0.1 and gap.Unit or Vector3.zero
 
-                    while i <= j do
-                        local c = path[i].to
-                        if flat(Vector3.new(c.x, 0, c.z) - root.Position).Magnitude < 1.6 then i = i + 1 else break end
+                    for k = j, i, -1 do
+                        local c = path[k].to
+                        if flat(Vector3.new(c.x, 0, c.z) - root.Position).Magnitude < 2 and math.abs(c.y - (root.Position.Y - 3)) < 4 then
+                            i = k + 1
+                            break
+                        end
                     end
                     RunService.Heartbeat:Wait()
                 end
@@ -4128,6 +4266,7 @@ do
                         RunService.Heartbeat:Wait()
                     end
                     moveDir = Vector3.zero
+                    lastPos = root and root.Position
                     local here = root and cellNear(root.Position)
                     if not here or here ~= link.to and flat(Vector3.new(here.x, 0, here.z) - target).Magnitude > 3 then
                         return "replan"
@@ -4145,10 +4284,19 @@ do
         obby.active = true
         obby.runs = obby.runs + 1
         bind()
+        local runStarted = os.clock()
         local ok, err = pcall(function()
             obby.last = "mapping the course"
             if not build(map) then obby.last = "no finish (Won) or nowhere to walk" return end
             obby.last = ("mapped: %d cells, %d moving hazards"):format(#cells, #movers)
+
+            local gateWait = os.clock()
+            while obby.enabled and alive and map.Parent and os.clock() - gateWait < 90 do
+                local gate = map:FindFirstChild("BLOCKER", true)
+                if not (gate and gate:IsA("BasePart") and gate.CanCollide and gate.Transparency < 0.99) then break end
+                obby.last = "waiting for the race to start"
+                task.wait(0.05)
+            end
             local attempts = 0
             while obby.enabled and alive and map.Parent and attempts < 30 do
                 local root = Game.ownRoot()
@@ -4176,29 +4324,99 @@ do
             end
         end)
         if not ok then obby.last = "stopped: " .. tostring(err) end
+        logResult("course", map, runStarted)
         moveDir = Vector3.zero
         obby.active = false
     end
+
+    local function indicatorColor(indicator)
+        local best = indicator.Color
+        for _, d in ipairs(indicator:GetDescendants()) do
+            if d:IsA("GuiObject") and d.Visible and d.BackgroundTransparency < 0.5 and d.AbsoluteSize.X > 5 then best = d.BackgroundColor3 break end
+        end
+        return best
+    end
+    local function colorGap(a, b) return math.abs(a.R - b.R) + math.abs(a.G - b.G) + math.abs(a.B - b.B) end
+    local function runColors(map)
+        if obby.active then return end
+        obby.active = true
+        obby.runs = obby.runs + 1
+        bind()
+        local runStarted = os.clock()
+        local ok, err = pcall(function()
+            local indicator = map:FindFirstChild("Indicator", true)
+            local started = os.clock()
+            local floorY
+            for _, tile in ipairs(map:GetDescendants()) do
+                if tile:IsA("BasePart") and tile.Name == "Tile" then floorY = math.min(floorY or math.huge, tile.Position.Y - tile.Size.Y / 2) end
+            end
+            obby.fell = false
+            while obby.enabled and alive and map.Parent and indicator and indicator.Parent and os.clock() - started < 240 do
+                local root = Game.ownRoot()
+                if root and floorY and root.Position.Y < floorY - 4 then obby.fell = true end
+
+                if root and floorY and root.Position.Y > floorY + 40 then
+                    obby.fell = true
+                    moveDir = Vector3.zero
+                    obby.last = "out, watching"
+                elseif not root then
+                    moveDir = Vector3.zero
+                else
+                    local want = indicatorColor(indicator)
+                    local best, bestD
+                    for _, tile in ipairs(map:GetDescendants()) do
+                        if tile:IsA("BasePart") and tile.Name == "Tile" and tile.CanCollide and tile.Transparency < 0.9
+                            and colorGap(tile.Color, want) < 0.08 then
+                            local d = flat(tile.Position - root.Position).Magnitude
+                            if not bestD or d < bestD then best, bestD = tile, d end
+                        end
+                    end
+                    if best then
+                        local to = flat(best.Position - root.Position)
+
+                        moveDir = to.Magnitude > math.min(best.Size.X, best.Size.Z) * 0.15 and to.Unit or Vector3.zero
+                        obby.last = ("standing on %s (%d studs away)"):format(tostring(best.BrickColor), math.floor(bestD))
+                    else
+                        moveDir = Vector3.zero
+                        obby.last = "waiting for the colour"
+                    end
+                end
+                RunService.Heartbeat:Wait()
+            end
+        end)
+        if not ok then obby.last = "stopped: " .. tostring(err) end
+        if obby.fell then obby.last = "fell off (" .. obby.last .. ")" else obby.last = "stayed on to the end" end
+        logResult("colours", map, runStarted)
+        moveDir = Vector3.zero
+        obby.active = false
+    end
+    obby.RunColors = runColors
 
     local function onMap(map)
         if map.Name ~= "MinigameMap" then return end
         task.wait(1)
         saveMap(map)
-        if obby.enabled and correctGame and map:FindFirstChild("Won", true) then task.spawn(run, map) end
+        if not (obby.enabled and correctGame) then return end
+        if map:FindFirstChild("Indicator", true) and map:FindFirstChild("Tile", true) then task.spawn(runColors, map)
+        elseif map:FindFirstChild("Won", true) then task.spawn(run, map) end
     end
     connect(workspace.ChildAdded, function(child) task.spawn(onMap, child) end)
     obby.Start = function()
         local map = workspace:FindFirstChild("MinigameMap")
-        if map and map:FindFirstChild("Won", true) and not obby.active then task.spawn(run, map) end
+        if not map or obby.active then return end
+        if map:FindFirstChild("Indicator", true) and map:FindFirstChild("Tile", true) then task.spawn(runColors, map)
+        elseif map:FindFirstChild("Won", true) then task.spawn(run, map) end
     end
     obby.Run = run
 end
 
-local hop = {enabled = false, after = 90, last = "off", skipJuggernaut = false, skip = {Juggernaut = true}}
+local hop = {enabled = false, after = 90, last = "off", skipJuggernaut = false, skip = {Juggernaut = true},
+    lowPop = false, minPlayers = 5}
 state.Hop = hop
 do
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
-    local idleSince, badSince, hoppingUntil = nil, nil, 0
+    local idleSince, badSince, smallSince, hoppingUntil = nil, nil, nil, 0
+    local startedAt = os.clock()
 
     local function currentMode()
         local mode = workspace:GetAttribute("GameMode")
@@ -4215,7 +4433,8 @@ do
             local players = tonumber(server:GetAttribute("PlayerCount")) or 0
             local max = tonumber(server:GetAttribute("MaxPlayers")) or 0
             if server.Name ~= here and server:GetAttribute("Type") == "Public" and type(mode) == "string"
-                and mode ~= "Intermission" and not hop.skip[mode] and players >= 3 and players <= max - 2 then
+                and mode ~= "Intermission" and not hop.skip[mode] and players >= 3 and players <= max - 2
+                and (not hop.wantBigger or players >= hop.minPlayers) then
                 list[#list + 1] = {id = server.Name, mode = mode, players = players, max = max,
                     name = server:GetAttribute("ServerName") or "?"}
             end
@@ -4250,9 +4469,29 @@ do
             local mode = currentMode()
             local bad = hop.skipJuggernaut and correctGame and mode ~= nil and hop.skip[mode] == true
             local idle = bot.enabled and bot.target == "none" and Game.ownRoot() ~= nil and not spawner.InLobby()
+
+            local count = #Players:GetPlayers()
+            local small = hop.lowPop and correctGame and count < hop.minPlayers and os.clock() - startedAt > 60
+            if small then
+                hop.wantBigger = true
+                small = #hop.Candidates() > 0
+                hop.wantBigger = false
+            end
             if os.clock() < hoppingUntil then
 
+            elseif small then
+                idleSince, badSince = nil, nil
+                smallSince = smallSince or os.clock()
+                local left = math.ceil(30 - (os.clock() - smallSince))
+                hop.last = ("only %d players here, hopping in %ds"):format(count, math.max(left, 0))
+                if left <= 0 then
+                    smallSince = nil
+                    hop.wantBigger = true
+                    hop.Go(("only %d players"):format(count))
+                    hop.wantBigger = false
+                end
             elseif bad then
+                smallSince = nil
 
                 badSince = badSince or os.clock()
                 local left = math.ceil(4 - (os.clock() - badSince))
@@ -4265,8 +4504,8 @@ do
                 hop.last = "nobody to fight, hopping in " .. math.max(left, 0) .. "s"
                 if left <= 0 then hop.Go("nobody to fight") end
             else
-                idleSince, badSince = nil, nil
-                hop.last = (hop.enabled or hop.skipJuggernaut) and ("watching" .. (mode and (" (" .. mode .. ")") or "")) or "off"
+                idleSince, badSince, smallSince = nil, nil, nil
+                hop.last = (hop.enabled or hop.skipJuggernaut or hop.lowPop) and ("watching" .. (mode and (" (" .. mode .. ")") or "")) or "off"
             end
             task.wait(1)
         end
@@ -4277,7 +4516,8 @@ local webhook = {enabled = false, url = "", every = 30, events = true, last = "o
 state.Webhook = webhook
 do
     local HttpService = game:GetService("HttpService")
-    local FILE = "BPHubABA/night.json"
+
+    local FILE = "BPHubABA/night_" .. tostring(player.UserId) .. ".json"
     local night
     local function load()
         local ok, data = pcall(function() return isfile(FILE) and HttpService:JSONDecode(readfile(FILE)) end)
@@ -4483,7 +4723,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.8.0",
+    return BPUI:CreateWindow({Version = "1.9.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -4639,6 +4879,15 @@ do
         Callback = function(value) spawner.quests = value == true quests.enabled = value == true end})
     ui.questStatus = questSection:AddLabel({Text = "off", Style = "Sub"})
 
+    local minigames = farmTab:CreateSection("Minigames")
+    presetToggles.minigames = minigames:AddToggle({Name = "Play minigames", Tag = "Experimental", Default = false, Flag = "minigames_auto",
+        Description = "When the server runs a minigame it plays it: runs the obby, the race and the maze to the finish (around walls, over gaps, waiting out spinners), and stands on the right colour in the colour game. The farm waits meanwhile.",
+        Callback = function(value)
+            obby.enabled = value == true
+            if obby.enabled then obby.Start() end
+        end})
+    ui.minigameStatus = minigames:AddLabel({Text = "off", Style = "Sub"})
+
     local discord = farmTab:CreateSection("Discord")
     discord:AddInput({Name = "Webhook link", Placeholder = "https://discord.com/api/webhooks/...", Flag = "webhook_url",
         Description = "In Discord: channel settings > Integrations > Webhooks > New Webhook > Copy Webhook URL. Anyone with the link can post to that channel, so keep it to yourself.",
@@ -4680,6 +4929,11 @@ do
     presetToggles.skipJuggernaut = night:AddToggle({Name = "Skip Juggernaut servers", Default = false, Flag = "hop_skip_juggernaut",
         Description = "Leaves a server as soon as it's playing Juggernaut, for one that has people in and isn't. Hops always pick a non-Juggernaut server.",
         Callback = function(value) hop.skipJuggernaut = value == true end})
+    presetToggles.lowPop = night:AddToggle({Name = "Hop when the server is small", Default = false, Flag = "hop_low_pop",
+        Description = "Joins a bigger server from the game's list when this one has fewer players than the number below for 30 seconds. More people to fight means more kills.",
+        Callback = function(value) hop.lowPop = value == true end})
+    farmControls.minPlayers = night:AddSlider({Name = "Fewest players", Min = 2, Max = 12, Default = 5, Increment = 1, Suffix = " players", Flag = "hop_min_players",
+        Callback = function(value) hop.minPlayers = tonumber(value) or 5 end})
     ui.hopStatus = night:AddLabel({Text = "off", Style = "Sub"})
 
     local BEST = {
@@ -4699,12 +4953,12 @@ do
     end})
     night:AddButton({Name = "Set up for overnight", ButtonText = "Turn on", Style = "Primary", Callback = function()
         applyBest()
-        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "quests", "noAfk", "leaveAfk", "hop", "skipJuggernaut", "bot"}) do
+        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "quests", "noAfk", "leaveAfk", "hop", "lowPop", "skipJuggernaut", "bot"}) do
             local element = presetToggles[key]
             if element then pcall(function() element:Set(true) end) end
         end
         pcall(function()
-            BPUI:Notify({Title = "Overnight", Content = rejoin.loader ~= "" and "Best farm settings, plus farm, auto spawn, auto block, anti-AFK, rejoin, server hop and Juggernaut skip are on."
+            BPUI:Notify({Title = "Overnight", Content = rejoin.loader ~= "" and "Best farm settings, plus farm, auto spawn, auto block, anti-AFK, rejoin, server hops and Juggernaut skip are on."
                 or "All on. If the hub doesn't come back after a hop, paste your loader in Misc > Server.", Duration = 5})
         end)
     end})
@@ -5253,7 +5507,8 @@ do
             return backpack ~= nil and backpack:FindFirstChild("Input") ~= nil
         end},
         {"HUD lobby line", "Auto spawn (knowing you're in the lobby)", function() return find(player, "PlayerGui", "HUD", "RightBotCorner", "Line1") ~= nil end},
-        {"character menu", "Auto spawn (character names)", function() return #spawner.Characters() > 0 end},
+        {"character menu", "Auto spawn (character names, locked ones skipped)", function() return #spawner.Characters() > 0 end},
+        {"GameMessage", "Play minigames (telling the minigames apart)", function() return replicated:FindFirstChild("GameMessage") ~= nil end},
         {"title screen Play", "Auto spawn after a hop", function()
             return type(getconnections) == "function" or type(firesignal) == "function" or replicated:FindFirstChild("Loaded") ~= nil
         end},
@@ -5389,6 +5644,7 @@ task.spawn(function()
                 math.floor(session.gold / hours)))
             ui.hopStatus:Set(hop.last)
             ui.questStatus:Set(quests.last .. (quests.done > 0 and ("  ·  done: " .. quests.done) or ""))
+            ui.minigameStatus:Set((obby.enabled and (obby.last == "off" and "waiting for a minigame" or obby.last) or "off") .. (obby.finishes > 0 and ("  ·  finished: " .. obby.finishes) or ""))
             ui.webhookStatus:Set(webhook.last)
             ui.brain:Set(brain.enabled and (brain.Summary() .. "  ·  now: " .. brain.CurrentStyle() .. "  ·  last: " .. brain.last) or "off")
 
