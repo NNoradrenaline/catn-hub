@@ -1,4 +1,4 @@
--- catn hub v1.13.2
+-- catn hub v1.13.3
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -3617,7 +3617,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.13.2"
+    local version = o.Version or "1.13.3"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3674,6 +3674,23 @@ local HttpService = game:GetService("HttpService")
 local rs = game:GetService("ReplicatedStorage")
 local GuiService = game:GetService("GuiService")
 local plr = Players.LocalPlayer
+
+local ABA_PLACE, ABA_AFK_WORLD = 1458767429, 5411459567
+if game.PlaceId == ABA_AFK_WORLD then
+    local leave = true
+    pcall(function()
+        if isfile("BPHubABA/leave_afk_world.txt") then leave = readfile("BPHubABA/leave_afk_world.txt") ~= "off" end
+    end)
+    if leave then
+        task.spawn(function()
+            task.wait(3)
+            while true do
+                pcall(TeleportService.Teleport, TeleportService, ABA_PLACE, plr)
+                task.wait(20)
+            end
+        end)
+    end
+end
 
 local PART_serverpick = (function()
 
@@ -3796,7 +3813,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.13.2"
+local HUB_VERSION = "1.13.3"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -3807,7 +3824,7 @@ local GAMES = {
         Name = "Anime Battle Arena",
         Key = "aba",
         Icon = "swords",
-        Version = "1.7.0",
+        Version = "1.8.0",
         Detect = function() return game.GameId == 578392296 or game.PlaceId == 1458767429 end,
     },
     {

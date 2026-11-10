@@ -98,11 +98,11 @@ local function gameAction(name)
     if action and action:IsA("InputAction") then return action end
 end
 
-local function tapAction(name)
+local function tapAction(name, hold)
     local action = gameAction(name)
     if not action then return false end
     action:Fire(true)
-    task.wait(0.03)
+    task.wait(hold or 0.03)
     action:Fire(false)
     return true
 end
@@ -1376,6 +1376,8 @@ do
     local sprinting = false
 
     local damagedAt = setmetatable({}, {__mode = "k"})
+
+    local aboveSince = setmetatable({}, {__mode = "k"})
     local watched = setmetatable({}, {__mode = "k"})
     local function watch(dummy)
         if watched[dummy.model] then return end
@@ -1571,7 +1573,8 @@ do
         jumpBusy = true
         bot.jumps = bot.jumps + 1
         task.spawn(function()
-            tapAction("MobileJump")
+
+            tapAction("MobileJump", 0.12)
             if double then
                 local t = os.clock()
                 while os.clock() - t < 0.6 do
@@ -1580,7 +1583,7 @@ do
                     if not r then break end
                     if os.clock() - t > 0.22 and r.AssemblyLinearVelocity.Y < 10 then break end
                 end
-                tapAction("MobileJump")
+                tapAction("MobileJump", 0.12)
             end
             task.wait(0.3)
             jumpBusy = false
@@ -1918,21 +1921,30 @@ do
         local failStreak = 0
         local jumpedAt = nil
         local skipAt = 0
+        local lobbyPos, lobbyAt = nil, 0
         while bot.enabled and alive do
+            bot.beat = os.clock()
             local rootPart, humanoid = Game.ownRoot()
             if not rootPart then
                 moveDir = Vector3.zero
                 bot.last = "waiting to respawn"
                 task.wait(0.5)
-            elseif state.Spawner and state.Spawner.InLobby() then
+            elseif state.Spawner and (state.Spawner.InLobby() or (lobbyPos and os.clock() - lobbyAt < 5
+                and (rootPart.Position - lobbyPos).Magnitude < 300)) then
 
+                if state.Spawner.InLobby() then lobbyPos, lobbyAt = rootPart.Position, os.clock() end
                 moveDir = Vector3.zero
                 setSprint(false)
                 pathTarget, path = nil, nil
                 bot.target, bot.targetPlayer, lockRoot = "none", nil, nil
                 bot.last = state.Spawner.enabled and "in the lobby, Auto spawn is putting you back in"
                     or "in the lobby (turn on Auto spawn to go back in by itself)"
-                task.wait(0.5)
+                task.wait(0.2)
+            elseif state.Obby and state.Obby.active then
+                moveDir = Vector3.zero
+                setSprint(false)
+                bot.last = "minigame: obby autoplay is running"
+                task.wait(0.3)
             elseif bot.targets == "Dummies" and not solo() then
                 moveDir = Vector3.zero
                 setSprint(false)
@@ -1953,7 +1965,12 @@ do
                         local best = pickTarget(rootPart.Position)
                         if best and best.model ~= pathTarget.model then
                             local current = (pathTarget.root.Position - rootPart.Position).Magnitude
-                            if current - (best.root.Position - rootPart.Position).Magnitude > 1 then keep = false end
+                            local other = (best.root.Position - rootPart.Position).Magnitude
+
+                            local hp = pathTarget.humanoid.Health / math.max(pathTarget.humanoid.MaxHealth, 1)
+                            local engaged = os.clock() - (damagedAt[pathTarget.model] or -math.huge) < 2.5 or hp < 0.35
+                            local margin = engaged and math.max(10, current * 0.5) or math.max(2, current * 0.15)
+                            if current - other > margin then keep = false end
                         end
                     end
                 elseif keep and os.clock() - lastNearestCheck > 0.5 and os.clock() - chaseStart > 1.5 then
@@ -2015,7 +2032,30 @@ do
                     local level = math.abs(dummy.root.Position.Y - rootPart.Position.Y) < 8
                     watch(dummy)
                     if chaseTarget ~= dummy.model then chaseTarget, chaseStart = dummy.model, os.clock() end
-                    if dist <= M1_REACH and level then
+                    local above = dummy.root.Position.Y - rootPart.Position.Y
+                    if dist <= M1_REACH and not level and above > 0 then
+                        aboveSince[dummy.model] = aboveSince[dummy.model] or os.clock()
+                    else
+                        aboveSince[dummy.model] = nil
+                    end
+                    if aboveSince[dummy.model] and os.clock() - aboveSince[dummy.model] > 3 then
+
+                        aboveSince[dummy.model] = nil
+                        blocked[dummy.model] = os.clock() + 5
+                        pathTarget, path = nil, nil
+                        moveDir = Vector3.zero
+                        bot.last = dummy.model.Name .. " is out of reach above, switching"
+                    elseif dist <= M1_REACH and not level and above > 0 and above < 17 then
+
+                        path = nil
+                        chaseStart = os.clock()
+                        local _, grounded = feetY(rootPart)
+                        if grounded then jump(above > SINGLE_JUMP + 1) end
+                        local to = (dummy.root.Position - rootPart.Position) * Vector3.new(1, 0, 1)
+                        moveDir = to.Magnitude > 1.5 and to.Unit or Vector3.zero
+                        bot.last = ("jumping at %s (%d studs up)"):format(dummy.model.Name, above)
+                        if rootPart.Position.Y + 4 > dummy.root.Position.Y - 4 then attack(dummy, rootPart, dist) end
+                    elseif dist <= M1_REACH and level then
 
                         path = nil
                         chaseStart = os.clock()
@@ -2221,8 +2261,17 @@ do
                 bot.last = "mapping hazards"
                 pcall(scanHazards)
             end
-            local ok, reason = pcall(loop)
-            if not ok then bot.last = "stopped: " .. tostring(reason) end
+            while bot.enabled and alive do
+                local ok, reason = pcall(loop)
+                if ok then break end
+
+                bot.crashes = (bot.crashes or 0) + 1
+                bot.crash = tostring(reason)
+                bot.crashAt = os.clock()
+                bot.last = "hit an error, restarting: " .. tostring(reason)
+                moveDir = Vector3.zero
+                task.wait(2)
+            end
             running = false
         end)
     end
@@ -2318,6 +2367,61 @@ end
 
 local function healthColor(fraction) return COLORS.hpLow:Lerp(COLORS.hpHigh, fraction) end
 
+local STYLE = {
+    card = Color3.fromRGB(14, 15, 19), line = Color3.fromRGB(255, 255, 255),
+    text = Color3.fromRGB(236, 237, 240), sub = Color3.fromRGB(150, 153, 163), faint = Color3.fromRGB(98, 101, 112),
+    good = Color3.fromRGB(80, 214, 140), warn = Color3.fromRGB(245, 176, 65), bad = Color3.fromRGB(240, 84, 84),
+    mode = Color3.fromRGB(156, 120, 255), gold = Color3.fromRGB(255, 206, 84), block = Color3.fromRGB(90, 170, 255),
+}
+local FONT_FAMILY = "rbxasset://fonts/families/BuilderSans.json"
+local function font(weight) return Font.new(FONT_FAMILY, weight or Enum.FontWeight.Medium) end
+local function hpTone(fraction)
+    if fraction > 0.6 then return STYLE.good:Lerp(STYLE.warn, (1 - fraction) / 0.4 * 0.35) end
+    if fraction > 0.3 then return STYLE.warn end
+    return STYLE.bad
+end
+local barTweens = setmetatable({}, {__mode = "k"})
+local TweenService = game:GetService("TweenService")
+local SLIDE = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+local function slide(fill, fraction)
+    fraction = math.clamp(fraction, 0, 1)
+    if barTweens[fill] and math.abs(barTweens[fill] - fraction) < 0.004 then return end
+    barTweens[fill] = fraction
+    TweenService:Create(fill, SLIDE, {Size = UDim2.fromScale(fraction, 1)}):Play()
+end
+local function label(parent, props)
+    props.BackgroundTransparency = 1
+    props.FontFace = props.FontFace or font()
+    props.TextColor3 = props.TextColor3 or STYLE.text
+    props.TextXAlignment = props.TextXAlignment or Enum.TextXAlignment.Left
+    return make("TextLabel", props, parent)
+end
+
+local function track(parent, size, props)
+    local back = make("Frame", {BackgroundColor3 = STYLE.line, BackgroundTransparency = 0.88, BorderSizePixel = 0, Size = size}, parent)
+    for key, value in pairs(props or {}) do back[key] = value end
+    make("UICorner", {CornerRadius = UDim.new(1, 0)}, back)
+    local fill = make("Frame", {BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), BackgroundColor3 = STYLE.good}, back)
+    make("UICorner", {CornerRadius = UDim.new(1, 0)}, fill)
+    return back, fill
+end
+
+local function chip(parent, order)
+    local frame = make("Frame", {AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 15), BackgroundTransparency = 0.8,
+        BorderSizePixel = 0, LayoutOrder = order or 0, Visible = false}, parent)
+    make("UICorner", {CornerRadius = UDim.new(0, 4)}, frame)
+    make("UIPadding", {PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5)}, frame)
+    local text = label(frame, {AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromScale(0, 1), TextSize = 10,
+        FontFace = font(Enum.FontWeight.Bold), TextXAlignment = Enum.TextXAlignment.Center})
+    return function(on, words, color)
+        frame.Visible = on == true
+        if not on then return end
+        text.Text = string.upper(words)
+        text.TextColor3, frame.BackgroundColor3 = color, color
+    end
+end
+
 local esp = {
     enabled = false, shown = 0,
     outline = true, fill = true, labels = true, distance = true,
@@ -2340,22 +2444,54 @@ do
         entries[targetPlayer] = nil
     end
 
+    local PIPS = 5
     local function getEntry(targetPlayer)
         if entries[targetPlayer] then return entries[targetPlayer] end
         local highlight = make("Highlight", {DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Enabled = false}, container)
-        local billboard = make("BillboardGui", {AlwaysOnTop = true, Enabled = false, Size = UDim2.fromOffset(150, 120),
-            StudsOffset = Vector3.new(0, 2.6, 0), SizeOffset = Vector2.new(0, 0.5), LightInfluence = 0,
+        local billboard = make("BillboardGui", {AlwaysOnTop = true, Enabled = false, Size = UDim2.fromOffset(180, 78),
+            StudsOffset = Vector3.new(0, 2.9, 0), SizeOffset = Vector2.new(0, 0.5), LightInfluence = 0,
             ResetOnSpawn = false}, container)
         local holder = make("Frame", {BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1)}, billboard)
-        make("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2),
-            VerticalAlignment = Enum.VerticalAlignment.Bottom}, holder)
+        make("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3),
+            VerticalAlignment = Enum.VerticalAlignment.Bottom, HorizontalAlignment = Enum.HorizontalAlignment.Center}, holder)
         local entry = {highlight = highlight, billboard = billboard}
-        entry.name = makeText(holder, {Size = UDim2.new(1, 0, 0, 14), LayoutOrder = 1, Font = Enum.Font.GothamBold,
-            TextSize = 13, TextStrokeTransparency = 0.35})
-        entry.healthBack, entry.healthFill = makeBar(holder, 5, 2)
-        entry.modeBack, entry.modeFill = makeBar(holder, 3, 3)
-        entry.healthText = makeText(holder, {Size = UDim2.new(1, 0, 0, 11), LayoutOrder = 4, TextSize = 10})
-        entry.moves = makeMoveRows(holder, 5, 10, 0.62, 10)
+
+        local chips = make("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 15), LayoutOrder = 1}, holder)
+        make("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, chips)
+        entry.chipsRow = chips
+        entry.modeChip, entry.blockChip, entry.skillChip = chip(chips, 1), chip(chips, 2), chip(chips, 3)
+
+        local card = make("Frame", {AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 20), BackgroundColor3 = STYLE.card,
+            BackgroundTransparency = 0.18, BorderSizePixel = 0, LayoutOrder = 2}, holder)
+        make("UICorner", {CornerRadius = UDim.new(0, 5)}, card)
+        entry.cardStroke = make("UIStroke", {Thickness = 1, Transparency = 0.55, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, card)
+        make("UIPadding", {PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 7)}, card)
+        make("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center,
+            Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, card)
+        entry.edge = make("Frame", {Size = UDim2.fromOffset(2, 10), BorderSizePixel = 0, LayoutOrder = 0}, card)
+        make("UICorner", {CornerRadius = UDim.new(1, 0)}, entry.edge)
+        entry.name = label(card, {AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 20), TextSize = 13,
+            FontFace = font(Enum.FontWeight.SemiBold), LayoutOrder = 1})
+        entry.distance = label(card, {AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 20), TextSize = 11,
+            TextColor3 = STYLE.sub, LayoutOrder = 2})
+
+        local bars = make("Frame", {BackgroundTransparency = 1, Size = UDim2.fromOffset(150, 9), LayoutOrder = 3}, holder)
+        entry.healthBack, entry.healthFill = track(bars, UDim2.fromOffset(116, 3), {Position = UDim2.fromOffset(0, 1)})
+        entry.healthText = label(bars, {Size = UDim2.fromOffset(30, 9), Position = UDim2.fromOffset(120, -1), TextSize = 10,
+            FontFace = font(Enum.FontWeight.SemiBold)})
+        entry.modeBack, entry.modeFill = track(bars, UDim2.fromOffset(116, 2), {Position = UDim2.fromOffset(0, 6)})
+        entry.bars = bars
+
+        local pips = make("Frame", {BackgroundTransparency = 1, Size = UDim2.fromOffset(150, 4), LayoutOrder = 4}, holder)
+        make("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, pips)
+        entry.pipsRow = pips
+        entry.pips = {}
+        for index = 1, PIPS do
+            local back, fill = track(pips, UDim2.fromOffset(20, 3), {LayoutOrder = index, Visible = false})
+            entry.pips[index] = {back = back, fill = fill}
+        end
         entries[targetPlayer] = entry
         return entry
     end
@@ -2377,8 +2513,8 @@ do
         highlight.Adornee = character
         highlight.Enabled = esp.outline or esp.fill
         highlight.OutlineColor, highlight.FillColor = color, color
-        highlight.OutlineTransparency = esp.outline and 0 or 1
-        highlight.FillTransparency = esp.fill and 0.7 or 1
+        highlight.OutlineTransparency = esp.outline and 0.15 or 1
+        highlight.FillTransparency = esp.fill and 0.82 or 1
 
         local showBillboard = esp.labels or esp.healthBar or esp.modeBar or esp.cooldowns
         entry.billboard.Adornee = character:FindFirstChild("Head") or root
@@ -2386,25 +2522,42 @@ do
         if not showBillboard then return end
 
         local mode = Game.chargeFraction(targetPlayer)
-        entry.modeBack.Visible = esp.modeBar
-        entry.modeFill.Size = UDim2.fromScale(mode, 1)
-        entry.modeFill.BackgroundColor3 = mode >= 1 and COLORS.modeReady or COLORS.mode
+        local blocking = Game.isBlocking(character)
+        local skill = Game.usingSkill(character)
+        entry.modeChip(esp.modeBar and mode >= 1, "Mode", STYLE.gold)
+        entry.blockChip(blocking, "Block", STYLE.block)
+        entry.skillChip(skill ~= nil, skill or "", STYLE.warn)
+        entry.chipsRow.Visible = (esp.modeBar and mode >= 1) or blocking or skill ~= nil
 
-        local name = targetPlayer.DisplayName
-        if esp.modeBar and mode >= 1 then name = name .. (" [MODE]") end
-        if esp.distance then name = name .. (string.format(" [%dm]", math.floor(distance + 0.5))) end
-        entry.name.Visible = esp.labels
-        entry.name.Text = name
-        entry.name.TextColor3 = color
+        entry.name.Parent.Visible = esp.labels
+        entry.name.Text = targetPlayer.DisplayName
+        entry.edge.BackgroundColor3 = color
+        entry.cardStroke.Color = color
+        entry.distance.Visible = esp.distance
+        entry.distance.Text = string.format("%dm", math.floor(distance + 0.5))
 
         local hp = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+        entry.bars.Visible = esp.healthBar or esp.modeBar
         entry.healthBack.Visible = esp.healthBar
         entry.healthText.Visible = esp.healthBar
-        entry.healthFill.Size = UDim2.fromScale(hp, 1)
-        entry.healthFill.BackgroundColor3 = healthColor(hp)
-        entry.healthText.Text = string.format("%d / %d", math.floor(humanoid.Health + 0.5), math.floor(humanoid.MaxHealth + 0.5))
+        slide(entry.healthFill, hp)
+        entry.healthFill.BackgroundColor3 = hpTone(hp)
+        entry.healthText.Text = tostring(math.floor(humanoid.Health + 0.5))
+        entry.healthText.TextColor3 = hpTone(hp)
+        entry.modeBack.Visible = esp.modeBar
+        slide(entry.modeFill, mode)
+        entry.modeFill.BackgroundColor3 = mode >= 1 and STYLE.gold or STYLE.mode
 
-        paintMoves(entry.moves, esp.cooldowns and Game.moves(targetPlayer) or {})
+        local moves = esp.cooldowns and Game.moves(targetPlayer) or {}
+        entry.pipsRow.Visible = #moves > 0
+        for index, pip in ipairs(entry.pips) do
+            local move = moves[index]
+            pip.back.Visible = move ~= nil
+            if move then
+                slide(pip.fill, move.progress)
+                pip.fill.BackgroundColor3 = move.ready and STYLE.good or STYLE.sub
+            end
+        end
     end
 
     local wasEnabled = false
@@ -2454,26 +2607,81 @@ do
     local gui = make("ScreenGui", {Name = "BPHubPanel", ResetOnSpawn = false, IgnoreGuiInset = true,
         DisplayOrder = 8000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, hiddenGuiParent())
     onCleanup(function() gui:Destroy() end)
-    local frame = make("Frame", {Size = UDim2.fromOffset(230, 0), Position = UDim2.new(0, 24, 0.5, -75),
-        BackgroundColor3 = Color3.fromRGB(18, 18, 24), BackgroundTransparency = 0.15, BorderSizePixel = 0,
+    local frame = make("Frame", {Size = UDim2.fromOffset(264, 0), Position = UDim2.new(0, 24, 0.5, -110),
+        BackgroundColor3 = STYLE.card, BackgroundTransparency = 0, BorderSizePixel = 0,
         Visible = false, AutomaticSize = Enum.AutomaticSize.Y}, gui)
-    make("UICorner", {CornerRadius = UDim.new(0, 8)}, frame)
-    make("UIStroke", {Color = Color3.fromRGB(143, 112, 236), Transparency = 0.5, Thickness = 1}, frame)
-    make("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
-        PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)}, frame)
-    make("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3)}, frame)
+    make("UICorner", {CornerRadius = UDim.new(0, 10)}, frame)
+    local frameStroke = make("UIStroke", {Color = STYLE.line, Transparency = 0.9, Thickness = 1}, frame)
+    make("UIPadding", {PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12),
+        PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)}, frame)
+    make("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8)}, frame)
 
-    local title = makeText(frame, {Size = UDim2.new(1, 0, 0, 16), LayoutOrder = 1, Font = Enum.Font.GothamBold,
-        TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd})
-    local subtitle = makeText(frame, {Size = UDim2.new(1, 0, 0, 12), LayoutOrder = 2, TextSize = 11,
-        TextColor3 = COLORS.dim, TextXAlignment = Enum.TextXAlignment.Left})
-    local _, healthFill = makeBar(frame, 7, 3)
-    local healthText = makeText(frame, {Size = UDim2.new(1, 0, 0, 12), LayoutOrder = 4, TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left})
-    local _, modeFill = makeBar(frame, 4, 5)
-    local modeText = makeText(frame, {Size = UDim2.new(1, 0, 0, 12), LayoutOrder = 6, TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left})
-    local moveRows = makeMoveRows(frame, 5, 10, 0.6, 11)
+    local header = make("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 38), LayoutOrder = 1}, frame)
+    local avatar = make("ImageLabel", {Size = UDim2.fromOffset(38, 38), BackgroundColor3 = Color3.fromRGB(32, 34, 42),
+        BorderSizePixel = 0, ScaleType = Enum.ScaleType.Crop}, header)
+    make("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
+    local avatarRing = make("UIStroke", {Thickness = 2, Transparency = 0.2}, avatar)
+    local title = label(header, {Position = UDim2.fromOffset(48, 1), Size = UDim2.new(1, -100, 0, 18), TextSize = 15,
+        FontFace = font(Enum.FontWeight.Bold), TextTruncate = Enum.TextTruncate.AtEnd})
+    local subtitle = label(header, {Position = UDim2.fromOffset(48, 20), Size = UDim2.new(1, -100, 0, 15), TextSize = 11,
+        TextColor3 = STYLE.sub, TextTruncate = Enum.TextTruncate.AtEnd})
+    local distanceText = label(header, {AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 1), Size = UDim2.fromOffset(52, 18),
+        TextSize = 15, FontFace = font(Enum.FontWeight.SemiBold), TextXAlignment = Enum.TextXAlignment.Right})
+    label(header, {AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 20), Size = UDim2.fromOffset(52, 15),
+        TextSize = 10, TextColor3 = STYLE.faint, Text = "AWAY", FontFace = font(Enum.FontWeight.Bold), TextXAlignment = Enum.TextXAlignment.Right})
+
+    local chipRow = make("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 15), LayoutOrder = 2}, frame)
+    make("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, chipRow)
+    local targetChip, modeChip, blockChip, skillChip = chip(chipRow, 1), chip(chipRow, 2), chip(chipRow, 3), chip(chipRow, 4)
+
+    local function divider(order)
+        make("Frame", {BackgroundColor3 = STYLE.line, BackgroundTransparency = 0.93, BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 1), LayoutOrder = order}, frame)
+    end
+    divider(3)
+
+    local function stat(order, caption, barHeight)
+        local box = make("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 15 + barHeight + 4), LayoutOrder = order}, frame)
+        label(box, {Size = UDim2.new(0.5, 0, 0, 14), TextSize = 10, TextColor3 = STYLE.faint, Text = caption,
+            FontFace = font(Enum.FontWeight.Bold)})
+        local value = label(box, {AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.5, 0, 0, 14),
+            TextSize = 12, FontFace = font(Enum.FontWeight.SemiBold), TextXAlignment = Enum.TextXAlignment.Right})
+        local _, fill = track(box, UDim2.new(1, 0, 0, barHeight), {Position = UDim2.fromOffset(0, 18)})
+        return value, fill
+    end
+    local healthValue, healthFill = stat(4, "HEALTH", 6)
+    local modeValue, modeFill = stat(5, "MODE", 4)
+    divider(6)
+
+    label(frame, {Size = UDim2.new(1, 0, 0, 12), TextSize = 10, TextColor3 = STYLE.faint, Text = "MOVES",
+        FontFace = font(Enum.FontWeight.Bold), LayoutOrder = 7})
+    local moveRows = {}
+    for index = 1, 5 do
+        local row = make("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18), LayoutOrder = 7 + index, Visible = false}, frame)
+        local badge = make("Frame", {Size = UDim2.fromOffset(18, 18), BackgroundColor3 = STYLE.line, BackgroundTransparency = 0.92, BorderSizePixel = 0}, row)
+        make("UICorner", {CornerRadius = UDim.new(0, 4)}, badge)
+        local number = label(badge, {Size = UDim2.fromScale(1, 1), TextSize = 10, Text = tostring(index), TextColor3 = STYLE.sub,
+            FontFace = font(Enum.FontWeight.Bold), TextXAlignment = Enum.TextXAlignment.Center})
+        local name = label(row, {Position = UDim2.fromOffset(26, 0), Size = UDim2.new(1, -96, 1, 0), TextSize = 12,
+            TextTruncate = Enum.TextTruncate.AtEnd})
+        local ready = label(row, {AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(60, 18),
+            TextSize = 10, Text = "READY", TextColor3 = STYLE.good, FontFace = font(Enum.FontWeight.Bold), TextXAlignment = Enum.TextXAlignment.Right})
+        local back, fill = track(row, UDim2.fromOffset(60, 4), {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5)})
+        moveRows[index] = {row = row, name = name, ready = ready, back = back, fill = fill, number = number}
+    end
+
+    local headshots = {}
+    local function headshot(userId)
+        if headshots[userId] ~= nil then return headshots[userId] end
+        headshots[userId] = ""
+        task.spawn(function()
+            local ok, image = pcall(function()
+                return Players:GetUserThumbnailAsync(userId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+            end)
+            if ok and image then headshots[userId] = image end
+        end)
+        return ""
+    end
 
     local dragging, dragStart, startPosition
     connect(frame.InputBegan, function(input)
@@ -2524,24 +2732,48 @@ do
         if root then
             local ownRoot = Game.ownRoot()
             local distance = ownRoot and (root.Position - ownRoot.Position).Magnitude or 0
+            local teamColor = subject.Team and not Game.onAfkTeam(subject) and subject.TeamColor.Color or STYLE.mode
+            avatar.Image = headshot(subject.UserId)
+            avatarRing.Color = teamColor
             title.Text = subject.DisplayName
-            title.TextColor3 = subject.Team and not Game.onAfkTeam(subject) and subject.TeamColor.Color or COLORS.text
-            local tags = {tostring(Game.characterName(subject)), string.format("%dm", math.floor(distance + 0.5))}
-            if Game.isBlocking(subject.Character) then tags[#tags + 1] = "BLOCKING" end
+            subtitle.Text = "@" .. subject.Name .. "  ·  " .. tostring(Game.characterName(subject))
+            distanceText.Text = string.format("%dm", math.floor(distance + 0.5))
+            distanceText.TextColor3 = distance <= 10 and STYLE.warn or STYLE.text
+
+            local mode = Game.chargeFraction(subject)
             local skill = Game.usingSkill(subject.Character)
-            if skill then tags[#tags + 1] = "using " .. skill end
-            subtitle.Text = table.concat(tags, "  ·  ")
+            local blocking = Game.isBlocking(subject.Character)
+            local farming = bot.enabled and bot.targetPlayer == subject
+            targetChip(farming, "Farm target", STYLE.bad)
+            modeChip(mode >= 1, "Mode ready", STYLE.gold)
+            blockChip(blocking, "Blocking", STYLE.block)
+            skillChip(skill ~= nil, skill or "", STYLE.warn)
+            chipRow.Visible = farming or mode >= 1 or blocking or skill ~= nil
 
             local hp = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
-            healthFill.Size = UDim2.fromScale(hp, 1)
-            healthFill.BackgroundColor3 = healthColor(hp)
-            healthText.Text = string.format("HP %d / %d", math.floor(humanoid.Health + 0.5), math.floor(humanoid.MaxHealth + 0.5))
-            local mode = Game.chargeFraction(subject)
-            modeFill.Size = UDim2.fromScale(mode, 1)
-            modeFill.BackgroundColor3 = mode >= 1 and COLORS.modeReady or COLORS.mode
-            modeText.Text = mode >= 1 and "MODE READY" or string.format("mode %d%%", math.floor(mode * 100))
-            modeText.TextColor3 = mode >= 1 and COLORS.modeReady or COLORS.dim
-            paintMoves(moveRows, Game.moves(subject))
+            slide(healthFill, hp)
+            healthFill.BackgroundColor3 = hpTone(hp)
+            healthValue.Text = string.format("%d / %d", math.floor(humanoid.Health + 0.5), math.floor(humanoid.MaxHealth + 0.5))
+            healthValue.TextColor3 = hpTone(hp)
+            slide(modeFill, mode)
+            modeFill.BackgroundColor3 = mode >= 1 and STYLE.gold or STYLE.mode
+            modeValue.Text = mode >= 1 and "READY" or string.format("%d%%", math.floor(mode * 100))
+            modeValue.TextColor3 = mode >= 1 and STYLE.gold or STYLE.text
+
+            local moves = Game.moves(subject)
+            for index, row in ipairs(moveRows) do
+                local move = moves[index]
+                row.row.Visible = move ~= nil
+                if move then
+                    row.name.Text = move.name
+                    row.name.TextColor3 = move.ready and STYLE.text or STYLE.sub
+                    row.ready.Visible = move.ready
+                    row.back.Visible = not move.ready
+                    slide(row.fill, move.progress)
+                    row.fill.BackgroundColor3 = STYLE.warn
+                    row.number.TextColor3 = move.ready and STYLE.good or STYLE.faint
+                end
+            end
         end
     end
 
@@ -2823,7 +3055,10 @@ do
         local last = tonumber(valueObject.Value) or 0
         connect(valueObject.Changed, function(value)
             value = tonumber(value) or 0
-            if value > last then session[key] = session[key] + (value - last) end
+            if value > last then
+                session[key] = session[key] + (value - last)
+                session[key .. "At"] = os.clock()
+            end
             last = value
         end)
     end
@@ -3185,7 +3420,7 @@ connect(player.Idled, function()
     end)
 end)
 
-local spawner = {enabled = false, character = "", noAfk = false, last = "off"}
+local spawner = {enabled = false, character = "", noAfk = false, quests = false, last = "off"}
 state.Spawner = spawner
 do
 
@@ -3233,9 +3468,30 @@ do
         return names
     end
 
+    function spawner.QuestCharacter()
+        local stats = player:FindFirstChild("ReplicatedStats")
+        local value = stats and stats:FindFirstChild("DailyQuest")
+        if not value then return nil end
+        local ok, data = pcall(function() return game:GetService("HttpService"):JSONDecode(value.Value) end)
+        if not ok or type(data) ~= "table" then return nil end
+        local quest = data.Focus and data[data.Focus]
+        if type(quest) ~= "table" or quest.Finished or type(quest.Requirements) ~= "table" then return nil end
+        local wanted = quest.Requirements.Character
+        if type(wanted) ~= "string" or wanted == "" then return nil end
+        return wanted, quest.Description
+    end
+
     local function pick()
         local wanted = spawner.character:lower():gsub("^%s+", ""):gsub("%s+$", "")
         local names = spawner.Characters()
+        if spawner.quests then
+            local questChar = spawner.QuestCharacter()
+            if questChar then
+                local q = questChar:lower()
+                for _, name in ipairs(names) do if name:lower() == q then return name end end
+                for _, name in ipairs(names) do if name:lower():sub(1, #q) == q then return name end end
+            end
+        end
         if wanted == "" then
 
             local last = player:GetAttribute("LastLoadedChar")
@@ -3301,7 +3557,7 @@ do
                         spawner.last = "no character called \"" .. spawner.character .. "\""
                     elseif browsing and not spawner.openedMenu then
                         spawner.last = "waiting, the character menu is open"
-                    elseif os.clock() - lobbySince > 2 and os.clock() - pressedAt > 4 then
+                    elseif os.clock() - lobbySince > 1 and os.clock() - pressedAt > 4 then
 
                         pressedAt = os.clock()
                         spawner.last = "spawning as " .. name
@@ -3327,9 +3583,615 @@ do
                 afkAt = os.clock()
                 remote:FireServer("AFKToggle")
             end
-            task.wait(1)
+            task.wait(0.5)
         end
     end)
+end
+
+local quests = {enabled = false, last = "off", done = 0, onFinished = nil}
+state.Quests = quests
+do
+    local HttpService = game:GetService("HttpService")
+    local remote = function() return game:GetService("ReplicatedStorage"):FindFirstChild("QuestStuff") end
+    local SINGLE_LIFE_DAMAGE, MAX_COMBO = 300, 10
+
+    function quests.Data()
+        local stats = player:FindFirstChild("ReplicatedStats")
+        local value = stats and stats:FindFirstChild("DailyQuest")
+        if not value then return nil end
+        local ok, data = pcall(function() return HttpService:JSONDecode(value.Value) end)
+        return ok and type(data) == "table" and data or nil
+    end
+
+    function quests.Focused()
+        local data = quests.Data()
+        local quest = data and data.Focus and data[data.Focus]
+        if type(quest) ~= "table" then return nil end
+        local goal = tonumber(quest.Num) or 1
+        local left = 0
+        for key, value in pairs(quest.Requirements or {}) do
+            if key ~= "Character" and tonumber(value) and tonumber(value) <= goal then left = goal - tonumber(value) end
+        end
+        return quest, ("%d/%d"):format(quest.Finished and goal or left, goal)
+    end
+
+    local function judge(text)
+        local t = tostring(text or ""):lower()
+        if t:find("ranked") or t:find("^%s*win") or t:find(" win ") then return nil, "ranked or wins" end
+        local character = text:match(" as (.-)%s+in a single life") or text:match(" as (.-)%s*$")
+            or text:match(" with (.-)%s*$") or text:match(" in (.-)'s mode")
+        if character then character = character:gsub("^%s+", ""):gsub("%s+$", "") end
+        local kills = t:match("get (%d+) kills")
+        if kills then
+            local effort = tonumber(kills) * (t:find("'s mode") and 3 or 1)
+            return effort, nil, character
+        end
+        local damage = t:match("deal (%d+) damage")
+        if damage then
+            damage = tonumber(damage)
+            if t:find("single life") and damage > SINGLE_LIFE_DAMAGE then return nil, "too much in one life" end
+            return damage / 60 * (t:find("single life") and 2 or 1), nil, character
+        end
+        local combo = t:match("combo count of (%d+)")
+        if combo then
+            if tonumber(combo) > MAX_COMBO then return nil, "combo too long" end
+            return 4, nil, character
+        end
+        return nil, "not something the farm does"
+    end
+    quests.Judge = judge
+
+    local function characterExists(name)
+        if not name then return true end
+        local q = name:lower()
+        for _, n in ipairs(spawner.Characters()) do
+            if n:lower() == q or n:lower():sub(1, #q) == q then return true end
+        end
+        return false
+    end
+
+    local function board()
+        local r = remote()
+        local gui = player.PlayerGui:FindFirstChild("DailyQuestGui")
+        local opened = false
+        if not gui and r then
+            r:FireServer("Open")
+            opened = true
+            gui = player.PlayerGui:WaitForChild("DailyQuestGui", 5)
+        end
+        if not gui then return nil end
+        task.wait(0.4)
+        local list = gui:FindFirstChild("List")
+        local options = {}
+        for _, slot in ipairs(list and list:GetChildren() or {}) do
+            local desc = slot:FindFirstChild("Description")
+            local finished = slot:FindFirstChild("Finished")
+            local gold = slot:FindFirstChild("Gold")
+            if slot:IsA("Frame") and desc and slot.Visible and not (finished and finished.Visible) then
+                local effort, why, character = judge(desc.Text)
+                local digits = (gold and gold.Text or ""):gsub("[^%d]", "")
+                local money = tonumber(digits) or 0
+                if effort and characterExists(character) then
+                    options[#options + 1] = {slot = slot.Name, text = desc.Text, gold = money, score = money / math.max(effort, 1)}
+                end
+            end
+        end
+        table.sort(options, function(a, b) return a.score > b.score end)
+        local best = options[1]
+        if best and r then r:FireServer("Take", best.slot) end
+        task.wait(0.3)
+        if opened and r then r:FireServer("Close") end
+        return best, #options
+    end
+
+    local checkedAt, lastFocus, lastFinished = -math.huge, nil, nil
+    local tries = 0
+    task.spawn(function()
+        while alive do
+            local quest, progress = quests.Focused()
+            local key = quest and (tostring(quest.QuestId) .. tostring(quest.Description))
+
+            if quest and quest.Finished and lastFocus == key and not lastFinished then
+                quests.done = quests.done + 1
+                if quests.onFinished then pcall(quests.onFinished, quest) end
+            end
+            lastFocus, lastFinished = key, quest and quest.Finished or false
+            if not quests.enabled or not correctGame then
+                quests.last = quests.enabled and "not in Anime Battle Arena" or "off"
+            else
+                local doable = quest and not quest.Finished and judge(quest.Description) ~= nil
+                if doable then
+                    tries = 0
+                    quests.last = ("on: %s - %s"):format(quest.Description, progress)
+                elseif os.clock() - checkedAt > 120 then
+                    checkedAt = os.clock()
+                    quests.last = "looking at the quest board"
+                    local ok, best, count = pcall(board)
+                    if not ok then
+                        local r = game:GetService("ReplicatedStorage"):FindFirstChild("QuestStuff")
+                        if r and player.PlayerGui:FindFirstChild("DailyQuestGui") then pcall(function() r:FireServer("Close") end) end
+                    end
+                    if ok and best then
+                        quests.last = "took: " .. best.text
+
+                        tries = tries + 1
+                        if tries <= 2 then checkedAt = os.clock() - 110 end
+                    elseif ok then
+                        quests.last = "nothing on the board the farm can finish" .. ""
+                    else
+                        quests.last = "couldn't read the board"
+                    end
+                end
+            end
+            task.wait(5)
+        end
+    end)
+end
+
+local obby = {enabled = false, active = false, last = "off", runs = 0, finishes = 0, jumps = 0, waits = 0}
+state.Obby = obby
+do
+    local HttpService = game:GetService("HttpService")
+    local G, V1, V2, T2 = 90, 37.2, 40, 0.3
+    local SPEED = 15
+    local CELL = 2
+    local RENDER = "CatnObby"
+    local SAFE_TOUCH = {Won = true, Check = true, CoinSpawner = true, Coin = true, Spawn = true}
+    local moveDir = Vector3.zero
+
+    local function airTime(dy, double)
+        if not double then
+            local disc = V1 * V1 - 2 * G * dy
+            if disc < 0 then return nil end
+            return (V1 + math.sqrt(disc)) / G
+        end
+        local h1 = V1 * T2 - 0.5 * G * T2 * T2
+        local disc = V2 * V2 - 2 * G * (dy - h1)
+        if disc < 0 then return nil end
+        return T2 + (V2 + math.sqrt(disc)) / G
+    end
+
+    local function topOf(part)
+        local cf, size = part.CFrame, part.Size
+        local axes = {{cf.RightVector, size.X}, {cf.UpVector, size.Y}, {cf.LookVector, size.Z}}
+        local up, upIndex = 0, nil
+        for i, a in ipairs(axes) do
+            local d = math.abs(a[1].Y)
+            if d > up then up, upIndex = d, i end
+        end
+        if up < 0.95 then return nil end
+        local others = {}
+        for i, a in ipairs(axes) do if i ~= upIndex then others[#others + 1] = a end end
+        return {part = part, y = part.Position.Y + axes[upIndex][2] / 2,
+            c = Vector3.new(part.Position.X, 0, part.Position.Z),
+            ax = Vector3.new(others[1][1].X, 0, others[1][1].Z).Unit, hx = others[1][2] / 2,
+            az = Vector3.new(others[2][1].X, 0, others[2][1].Z).Unit, hz = others[2][2] / 2}
+    end
+    local function onTop(t, x, z, inset)
+        local rel = Vector3.new(x - t.c.X, 0, z - t.c.Z)
+        return math.abs(rel:Dot(t.ax)) <= t.hx - inset and math.abs(rel:Dot(t.az)) <= t.hz - inset
+    end
+
+    local function inBox(part, point, grow, growUp)
+        local rel = part.CFrame:PointToObjectSpace(point)
+        local h = part.Size / 2
+        return math.abs(rel.X) <= h.X + grow and math.abs(rel.Z) <= h.Z + grow and math.abs(rel.Y) <= h.Y + (growUp or grow)
+    end
+
+    local function saveMap(map)
+        pcall(function()
+            local parts = {}
+            for _, d in ipairs(map:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    local rx, ry, rz = d.CFrame:ToOrientation()
+                    parts[#parts + 1] = {n = d.Name, p = {d.Position.X, d.Position.Y, d.Position.Z},
+                        s = {d.Size.X, d.Size.Y, d.Size.Z}, r = {math.deg(rx), math.deg(ry), math.deg(rz)},
+                        c = d.CanCollide, t = d:FindFirstChildOfClass("TouchTransmitter") ~= nil, tr = d.Transparency}
+                end
+            end
+            local message = game:GetService("ReplicatedStorage"):FindFirstChild("GameMessage")
+            local label = (message and tostring(message.Value) or "minigame"):gsub("[^%w]+", "_"):sub(1, 30)
+            if not isfolder("BPHubABA") then makefolder("BPHubABA") end
+            if not isfolder("BPHubABA/minigames") then makefolder("BPHubABA/minigames") end
+            writefile(("BPHubABA/minigames/%s_%d.json"):format(label, os.time()),
+                HttpService:JSONEncode({message = message and message.Value, parts = parts}))
+        end)
+    end
+
+    local grid, cells, goalCells, movers, statics, won = nil, nil, nil, nil, nil, nil
+    local function key(ix, iz) return ix * 100000 + iz end
+
+    local function build(map)
+        won = nil
+        local parts = {}
+        for _, d in ipairs(map:GetDescendants()) do
+            if d:IsA("BasePart") then
+                parts[#parts + 1] = d
+                if d.Name == "Won" then won = d end
+            end
+        end
+        if not won then return false end
+
+        local before = {}
+        for _, part in ipairs(parts) do before[part] = part.CFrame end
+        task.wait(0.12)
+        movers, statics = {}, {}
+        local surfaces = {}
+        for _, part in ipairs(parts) do
+            local moved = part.Name == "Spinner" or not part.Anchored
+                or (before[part].Position - part.Position).Magnitude > 0.01
+                or before[part].LookVector:Dot(part.CFrame.LookVector) < 0.99999
+                or before[part].UpVector:Dot(part.CFrame.UpVector) < 0.99999
+            local touch = part:FindFirstChildOfClass("TouchTransmitter") ~= nil
+            if moved and (touch or part.CanCollide) then
+                movers[#movers + 1] = {part = part, last = part.CFrame, at = os.clock(), omega = Vector3.zero, vel = Vector3.zero}
+            elseif touch and not SAFE_TOUCH[part.Name] then
+                statics[#statics + 1] = part
+            elseif part.CanCollide and not moved then
+                local t = topOf(part)
+                if t and t.hx >= 0.9 and t.hz >= 0.9 then surfaces[#surfaces + 1] = t end
+            end
+        end
+
+        grid, cells, goalCells = {}, {}, {}
+        local count = 0
+        for _, t in ipairs(surfaces) do
+            local r = math.sqrt(t.hx * t.hx + t.hz * t.hz)
+            local x0, x1 = math.floor((t.c.X - r) / CELL), math.ceil((t.c.X + r) / CELL)
+            local z0, z1 = math.floor((t.c.Z - r) / CELL), math.ceil((t.c.Z + r) / CELL)
+            for ix = x0, x1 do
+                for iz = z0, z1 do
+                    local x, z = ix * CELL, iz * CELL
+                    if onTop(t, x, z, 0.6) then
+                        local point = Vector3.new(x, t.y + 2, z)
+                        local blocked = false
+                        for _, h in ipairs(statics) do
+                            if inBox(h, point, 1.2, 2.5) then blocked = true break end
+                        end
+
+                        if not blocked then
+                            local list = grid[key(ix, iz)] or {}
+                            local cell = {ix = ix, iz = iz, x = x, z = z, y = t.y, surf = t, i = #cells + 1}
+                            for _, other in ipairs(list) do
+                                if math.abs(other.y - t.y) < 3 then cell = nil break end
+                            end
+                            if cell then
+                                list[#list + 1] = cell
+                                grid[key(ix, iz)] = list
+                                cells[#cells + 1] = cell
+                                if inBox(won, Vector3.new(x, t.y + 2.5, z), 0.5, 1) then
+                                    cell.goal = true
+                                    goalCells[#goalCells + 1] = cell
+                                end
+                            end
+                        end
+                        count = count + 1
+                        if count % 4000 == 0 then task.wait() end
+                        if #cells > 40000 then break end
+                    end
+                end
+            end
+        end
+        return #cells > 0 and #goalCells > 0
+    end
+
+    local function cellsAt(ix, iz) return grid[key(ix, iz)] end
+
+    local function cellNear(position)
+        local best, bestD
+        local ix, iz = math.floor(position.X / CELL + 0.5), math.floor(position.Z / CELL + 0.5)
+        for dx = -2, 2 do
+            for dz = -2, 2 do
+                for _, c in ipairs(cellsAt(ix + dx, iz + dz) or {}) do
+                    local feet = position.Y - 3
+                    if c.y <= feet + 2 and c.y >= feet - 8 then
+                        local d = math.abs(c.x - position.X) + math.abs(c.z - position.Z) + math.abs(c.y - feet) * 0.5
+                        if not bestD or d < bestD then best, bestD = c, d end
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    local DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}}
+    local function links(cell)
+        local out = {}
+        for _, d in ipairs(DIRS) do
+            local diag = d[1] ~= 0 and d[2] ~= 0
+            for _, n in ipairs(cellsAt(cell.ix + d[1], cell.iz + d[2]) or {}) do
+                if math.abs(n.y - cell.y) < 1.6 then
+                    out[#out + 1] = {to = n, kind = "walk", cost = diag and CELL * 1.42 or CELL}
+                end
+            end
+
+            local gap = false
+            for k = 2, 12 do
+                local list = cellsAt(cell.ix + d[1] * k, cell.iz + d[2] * k)
+                local landed = false
+                if not list or #list == 0 then
+                    gap = true
+                else
+                    for _, n in ipairs(list) do
+                        local dy = n.y - cell.y
+                        local dist = k * CELL * (diag and 1.42 or 1)
+                        local needsJump = gap or dy > 1.6
+                        if needsJump and dy < 15 then
+                            local t1, t2 = airTime(dy + 0.8, false), airTime(dy + 0.8, true)
+                            local kind
+                            if t1 and SPEED * t1 >= dist + 1 then kind = "jump"
+                            elseif t2 and SPEED * t2 >= dist + 1 then kind = "double" end
+                            if kind then
+                                out[#out + 1] = {to = n, kind = kind, cost = dist + (kind == "jump" and 3 or 6)}
+                                landed = true
+                            end
+                        elseif not needsJump and math.abs(dy) < 1.6 then
+                            landed = true
+                        end
+                    end
+                end
+                if landed then break end
+            end
+        end
+        return out
+    end
+
+    local function plan(start)
+        local goal = goalCells[1]
+        local function h(c)
+            local best = math.huge
+            for i = 1, math.min(#goalCells, 30) do
+                local g = goalCells[i]
+                local d = math.sqrt((g.x - c.x) ^ 2 + (g.z - c.z) ^ 2)
+                if d < best then best = d end
+            end
+            return best
+        end
+        local open, gScore, came, cameLink, closed = {start}, {[start] = 0}, {}, {}, {}
+        local fScore = {[start] = h(start)}
+        local expanded = 0
+        while #open > 0 do
+            local bi, best = 1, open[1]
+            for i = 2, #open do if fScore[open[i]] < fScore[best] then bi, best = i, open[i] end end
+            table.remove(open, bi)
+            if best.goal then
+                local path = {}
+                local cur = best
+                while came[cur] do table.insert(path, 1, cameLink[cur]) cur = came[cur] end
+                return path
+            end
+            closed[best] = true
+            expanded = expanded + 1
+            if expanded % 300 == 0 then task.wait() end
+            if expanded > 20000 then return nil end
+            for _, link in ipairs(links(best)) do
+                local n = link.to
+                if not closed[n] then
+                    local g = gScore[best] + link.cost
+                    if not gScore[n] or g < gScore[n] then
+                        if not gScore[n] then open[#open + 1] = n end
+                        gScore[n], came[n], cameLink[n] = g, best, link
+                        fScore[n] = g + h(n)
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function trackMovers()
+        local now = os.clock()
+        for _, m in ipairs(movers) do
+            local part = m.part
+            if part.Parent then
+                local dt = now - m.at
+                if dt > 0.02 then
+                    local cf = part.CFrame
+                    local delta = m.last:ToObjectSpace(cf)
+                    local axis, angle = delta:ToAxisAngle()
+                    m.omega = m.last:VectorToWorldSpace(axis) * (angle / dt)
+                    m.vel = (cf.Position - m.last.Position) / dt
+                    m.last, m.at = cf, now
+                end
+            end
+        end
+    end
+
+    local function dangerAt(spot, feetY, ahead)
+        for _, m in ipairs(movers) do
+            local part = m.part
+            if part.Parent then
+                local speed = m.omega.Magnitude
+                for t = 0, ahead, 0.05 do
+                    local cf = part.CFrame
+                    if speed > 0.01 then cf = CFrame.fromAxisAngle(m.omega.Unit, speed * t) * (cf - cf.Position) + cf.Position end
+                    cf = cf + m.vel * t
+                    local h = part.Size / 2
+                    for _, y in ipairs({feetY + 1, feetY + 3, feetY + 5}) do
+                        local rel = cf:PointToObjectSpace(Vector3.new(spot.X, y, spot.Z))
+                        if math.abs(rel.X) <= h.X + 1.6 and math.abs(rel.Y) <= h.Y + 1.6 and math.abs(rel.Z) <= h.Z + 1.6 then return true end
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    local function jump(double)
+        local action = gameAction("MobileJump")
+        if not action then return end
+        obby.jumps = obby.jumps + 1
+        task.spawn(function()
+
+            action:Fire(true) task.wait(0.12) action:Fire(false)
+            if double then
+                task.wait(math.max(T2 - 0.12, 0.05))
+                action:Fire(true) task.wait(0.12) action:Fire(false)
+            end
+        end)
+    end
+
+    local function grounded(root)
+        local _, humanoid = Game.ownRoot()
+        return humanoid ~= nil and humanoid.FloorMaterial ~= Enum.Material.Air and math.abs(root.AssemblyLinearVelocity.Y) < 6
+    end
+
+    local function bind()
+        pcall(function() RunService:UnbindFromRenderStep(RENDER) end)
+        RunService:BindToRenderStep(RENDER, Enum.RenderPriority.Character.Value + 2, function()
+            if not obby.active then return end
+            local _, humanoid = Game.ownRoot()
+            if humanoid then humanoid:Move(moveDir, false) end
+        end)
+    end
+    onCleanup(function() pcall(function() RunService:UnbindFromRenderStep(RENDER) end) end)
+
+    local function flat(v) return Vector3.new(v.X, 0, v.Z) end
+
+    local function clearWalk(from, cell)
+        local to = Vector3.new(cell.x, 0, cell.z)
+        local offset = flat(to - from)
+        local steps = math.max(1, math.ceil(offset.Magnitude / 1))
+        for k = 1, steps do
+            local p = from + offset * (k / steps)
+            local list = cellsAt(math.floor(p.X / CELL + 0.5), math.floor(p.Z / CELL + 0.5))
+            local ok = false
+            for _, c in ipairs(list or {}) do if math.abs(c.y - cell.y) < 1.6 then ok = true break end end
+            if not ok then return false end
+        end
+        return true
+    end
+
+    local function follow(path, map)
+        local i = 1
+        local legStart = os.clock()
+        while i <= #path do
+            if not obby.enabled or not alive or not map.Parent then return "stop" end
+            local root = Game.ownRoot()
+            if not root then return "replan" end
+            trackMovers()
+            local link = path[i]
+            local target = Vector3.new(link.to.x, link.to.y, link.to.z)
+            if link.kind == "walk" then
+
+                local j = i
+                while j < #path and j < i + 8 and path[j + 1].kind == "walk" and clearWalk(root.Position, path[j + 1].to) do j = j + 1 end
+                local far = path[j].to
+                local aim = Vector3.new(far.x, far.y, far.z)
+                local gap = flat(aim - root.Position)
+
+                local nextSpot = root.Position + (gap.Magnitude > 0.1 and gap.Unit or Vector3.zero) * 3
+                if dangerAt(nextSpot, link.to.y, 0.55) then
+                    obby.waits = obby.waits + 1
+                    obby.last = "waiting for a moving hazard"
+                    if dangerAt(root.Position, link.to.y, 0.35) then
+                        moveDir = gap.Magnitude > 0.1 and -gap.Unit or Vector3.zero
+                    else
+                        moveDir = Vector3.zero
+                    end
+                    RunService.Heartbeat:Wait()
+                else
+                    obby.last = ("running (%d steps left)"):format(#path - i + 1)
+                    moveDir = gap.Magnitude > 0.1 and gap.Unit or Vector3.zero
+
+                    while i <= j do
+                        local c = path[i].to
+                        if flat(Vector3.new(c.x, 0, c.z) - root.Position).Magnitude < 1.6 then i = i + 1 else break end
+                    end
+                    RunService.Heartbeat:Wait()
+                end
+            else
+
+                local from = i > 1 and path[i - 1].to or cellNear(root.Position)
+                local takeoff = from and Vector3.new(from.x, 0, from.z) or flat(root.Position)
+                local toTakeoff = flat(takeoff - root.Position)
+                if toTakeoff.Magnitude > 1.2 then
+                    moveDir = toTakeoff.Unit
+                    RunService.Heartbeat:Wait()
+                elseif dangerAt(target, link.to.y, 0.9) then
+                    moveDir = Vector3.zero
+                    obby.waits = obby.waits + 1
+                    obby.last = "waiting to jump"
+                    RunService.Heartbeat:Wait()
+                else
+                    obby.last = link.kind == "double" and "double jump" or "jump"
+                    jump(link.kind == "double")
+                    local air = os.clock()
+                    task.wait(0.08)
+                    while os.clock() - air < 3 do
+                        root = Game.ownRoot()
+                        if not root then return "replan" end
+                        local gap = flat(target - root.Position)
+
+                        moveDir = gap.Magnitude > 0.7 and gap.Unit or Vector3.zero
+                        if os.clock() - air > 0.3 and grounded(root) then break end
+                        RunService.Heartbeat:Wait()
+                    end
+                    moveDir = Vector3.zero
+                    local here = root and cellNear(root.Position)
+                    if not here or here ~= link.to and flat(Vector3.new(here.x, 0, here.z) - target).Magnitude > 3 then
+                        return "replan"
+                    end
+                    i = i + 1
+                end
+            end
+            if os.clock() - legStart > 40 then return "replan" end
+        end
+        return "ok"
+    end
+
+    local function run(map)
+        if obby.active then return end
+        obby.active = true
+        obby.runs = obby.runs + 1
+        bind()
+        local ok, err = pcall(function()
+            obby.last = "mapping the course"
+            if not build(map) then obby.last = "no finish (Won) or nowhere to walk" return end
+            obby.last = ("mapped: %d cells, %d moving hazards"):format(#cells, #movers)
+            local attempts = 0
+            while obby.enabled and alive and map.Parent and attempts < 30 do
+                local root = Game.ownRoot()
+                if root and won and inBox(won, root.Position, 0.5, 2) then
+                    obby.finishes = obby.finishes + 1
+                    obby.last = "finished"
+                    break
+                end
+                if not root or not grounded(root) then
+                    moveDir = Vector3.zero
+                    task.wait(0.2)
+                else
+                    local start = cellNear(root.Position)
+                    local path = start and plan(start)
+                    attempts = attempts + 1
+                    if not path then
+                        obby.last = "no way to the finish from here"
+                        task.wait(0.5)
+                    else
+                        local result = follow(path, map)
+                        moveDir = Vector3.zero
+                        if result == "stop" then break end
+                    end
+                end
+            end
+        end)
+        if not ok then obby.last = "stopped: " .. tostring(err) end
+        moveDir = Vector3.zero
+        obby.active = false
+    end
+
+    local function onMap(map)
+        if map.Name ~= "MinigameMap" then return end
+        task.wait(1)
+        saveMap(map)
+        if obby.enabled and correctGame and map:FindFirstChild("Won", true) then task.spawn(run, map) end
+    end
+    connect(workspace.ChildAdded, function(child) task.spawn(onMap, child) end)
+    obby.Start = function()
+        local map = workspace:FindFirstChild("MinigameMap")
+        if map and map:FindFirstChild("Won", true) and not obby.active then task.spawn(run, map) end
+    end
+    obby.Run = run
 end
 
 local hop = {enabled = false, after = 90, last = "off", skipJuggernaut = false, skip = {Juggernaut = true}}
@@ -3411,10 +4273,217 @@ do
     end)
 end
 
+local webhook = {enabled = false, url = "", every = 30, events = true, last = "off"}
+state.Webhook = webhook
+do
+    local HttpService = game:GetService("HttpService")
+    local FILE = "BPHubABA/night.json"
+    local night
+    local function load()
+        local ok, data = pcall(function() return isfile(FILE) and HttpService:JSONDecode(readfile(FILE)) end)
+        if ok and type(data) == "table" and os.time() - (tonumber(data.updated) or 0) < 1800 then return data end
+        return {started = os.time(), updated = os.time(), kills = 0, deaths = 0, gold = 0, damage = 0, quests = 0, hops = 0, servers = 1}
+    end
+    night = load()
+
+    if night.job ~= game.JobId then
+        night.servers = (night.job and (night.servers or 0) + 1) or 1
+        night.job = game.JobId
+    end
+    local seen = {kills = 0, deaths = 0, gold = 0, damage = 0}
+    local function save()
+        for _, key in ipairs({"kills", "deaths", "gold", "damage"}) do
+            local now = session[key] or 0
+            if now > seen[key] then night[key] = (night[key] or 0) + (now - seen[key]) end
+            seen[key] = now
+        end
+        night.updated = os.time()
+        pcall(function()
+            if not isfolder("BPHubABA") then makefolder("BPHubABA") end
+            writefile(FILE, HttpService:JSONEncode(night))
+        end)
+    end
+    webhook.Night = function() save() return night end
+
+    local reset = session.Reset
+    session.Reset = function() reset() for key in pairs(seen) do seen[key] = 0 end end
+
+    local function valid(url)
+        return type(url) == "string" and (url:match("^https://discord%.com/api/webhooks/%d+/[%w_%-]+$")
+            or url:match("^https://%a*%.?discord%.com/api/webhooks/%d+/[%w_%-]+$")
+            or url:match("^https://discordapp%.com/api/webhooks/%d+/[%w_%-]+$")) ~= nil
+    end
+    webhook.Valid = valid
+
+    local function post(payload)
+        local send = request or http_request or (syn and syn.request) or (http and http.request)
+        if not send then webhook.last = "this executor can't send web requests" return false end
+        if not valid(webhook.url) then webhook.last = "paste a Discord webhook link first" return false end
+        local ok, res = pcall(send, {Url = webhook.url, Method = "POST",
+            Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)})
+        local code = ok and type(res) == "table" and tonumber(res.StatusCode) or 0
+        if code >= 200 and code < 300 then
+            webhook.last = "sent " .. os.date("%H:%M")
+            return true
+        end
+        webhook.last = ok and ("Discord said " .. tostring(code)) or ("couldn't send: " .. tostring(res))
+        return false
+    end
+
+    local function duration(seconds)
+        local m = math.floor(seconds / 60)
+        return ("%dh %02dm"):format(math.floor(m / 60), m % 60)
+    end
+    local function num(n)
+        local s = tostring(math.floor(n + 0.5))
+        local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+        return (out:gsub("^,", ""))
+    end
+
+    function webhook.Stats(title)
+        save()
+        local secs = math.max(os.time() - night.started, 60)
+        local hours = secs / 3600
+        local kd = night.deaths > 0 and night.kills / night.deaths or night.kills
+        local quest, progress
+        if state.Quests then quest, progress = state.Quests.Focused() end
+        local fields = {
+            {name = "Kills", value = num(night.kills), inline = true},
+            {name = "Deaths", value = num(night.deaths) .. (" (K/D %.2f)"):format(kd), inline = true},
+            {name = "Gold", value = "+" .. num(night.gold), inline = true},
+            {name = "Per hour", value = ("%s kills · %s gold"):format(num(night.kills / hours), num(night.gold / hours)), inline = true},
+            {name = "Damage", value = num(night.damage), inline = true},
+            {name = "Quests done", value = num(night.quests or 0), inline = true},
+            {name = "This server", value = ("%s · %d players · %s here · %d kills"):format(tostring(workspace:GetAttribute("GameMode") or "?"),
+                #Players:GetPlayers(), duration(os.clock() - session.started), session.kills), inline = false},
+            {name = "Playing", value = tostring(player:GetAttribute("LastLoadedChar") or "-")
+                .. (quest and not quest.Finished and ("\nQuest: " .. tostring(quest.Description) .. " - " .. tostring(progress)) or ""), inline = false},
+        }
+        return {
+            username = "Catn Hub",
+            embeds = {{
+                title = title or ("Farm report · " .. duration(secs)),
+                color = 0x8F70EC,
+                fields = fields,
+                footer = {text = ("Anime Battle Arena · %d servers · %d hops"):format(night.servers or 1, night.hops or 0)},
+                timestamp = DateTime.now():ToIsoDate(),
+            }},
+        }
+    end
+
+    function webhook.Event(text, color)
+        if not (webhook.enabled and webhook.events) then return end
+        task.spawn(post, {username = "Catn Hub", embeds = {{description = text, color = color or 0x8F70EC,
+            timestamp = DateTime.now():ToIsoDate()}}})
+    end
+    function webhook.SendNow(title) return post(webhook.Stats(title)) end
+
+    if state.Quests then
+        state.Quests.onFinished = function(quest)
+            night.quests = (night.quests or 0) + 1
+            save()
+            local r = quest.Rewards or {}
+            webhook.Event(("Quest done: **%s** (+$%s, +%s EXP)"):format(tostring(quest.Description), tostring(r.Gold or "?"), tostring(r.EXP or "?")), 0x57F287)
+        end
+    end
+    local go = hop.Go
+    hop.Go = function(reason)
+        night.hops = (night.hops or 0) + 1
+        save()
+        webhook.Event(("Hopping servers: %s"):format(tostring(reason)), 0xFEE75C)
+        task.wait(0.5)
+        return go(reason)
+    end
+
+    task.spawn(function()
+        local sentAt = os.clock()
+        while alive do
+            save()
+            if webhook.enabled and os.clock() - sentAt >= webhook.every * 60 then
+                sentAt = os.clock()
+                post(webhook.Stats())
+            elseif not webhook.enabled then
+                webhook.last = "off"
+                sentAt = os.clock()
+            end
+            task.wait(10)
+        end
+    end)
+end
+
+local screen = {no3d = false, cover = "Off", fpsLimit = false, fps = 30}
+state.Screen = screen
+do
+    local gui, label
+    local capped = false
+    local function build()
+        if gui and gui.Parent then return end
+        gui = Instance.new("ScreenGui")
+        gui.Name = "CatnCover"
+        gui.IgnoreGuiInset = true
+        gui.ResetOnSpawn = false
+        gui.DisplayOrder = 50
+        gui.Enabled = false
+        local frame = Instance.new("Frame")
+        frame.Name = "Cover"
+        frame.Size = UDim2.fromScale(1, 1)
+        frame.BorderSizePixel = 0
+        frame.Parent = gui
+        label = Instance.new("TextLabel")
+        label.BackgroundTransparency = 1
+        label.AnchorPoint = Vector2.new(0.5, 0.5)
+        label.Position = UDim2.fromScale(0.5, 0.5)
+        label.Size = UDim2.new(0.8, 0, 0, 60)
+        label.Font = Enum.Font.GothamMedium
+        label.TextSize = 16
+        label.TextWrapped = true
+        label.Parent = frame
+        if type(syn) == "table" and type(syn.protect_gui) == "function" then pcall(syn.protect_gui, gui) end
+        gui.Parent = hiddenGuiParent()
+    end
+    local function apply()
+        local covered = screen.cover == "Black" or screen.cover == "White"
+        pcall(function() RunService:Set3dRenderingEnabled(not (screen.no3d or covered)) end)
+        if screen.cover == "Black" or screen.cover == "White" then
+            build()
+            local black = screen.cover == "Black"
+            gui.Cover.BackgroundColor3 = black and Color3.new(0, 0, 0) or Color3.new(1, 1, 1)
+            label.TextColor3 = Color3.fromRGB(120, 120, 130)
+            gui.Enabled = true
+        elseif gui then
+            gui.Enabled = false
+        end
+
+        if type(setfpscap) == "function" and (screen.fpsLimit or capped) then
+            capped = screen.fpsLimit
+            pcall(setfpscap, screen.fpsLimit and screen.fps or 0)
+        end
+    end
+    screen.Apply = apply
+
+    task.spawn(function()
+        while alive do
+            if gui and gui.Enabled and label then
+                local s = state.Session
+                local bot = state.Bot
+                label.Text = ("screen covered  ·  %s\nkills %d  ·  deaths %d  ·  gold +%d  ·  RightShift opens the menu"):format(
+                    bot and bot.enabled and ("farming: " .. tostring(bot.last)) or "farm off",
+                    s and s.kills or 0, s and s.deaths or 0, math.floor(s and s.gold or 0))
+            end
+            task.wait(1)
+        end
+    end)
+    onCleanup(function()
+        pcall(function() RunService:Set3dRenderingEnabled(true) end)
+        if type(setfpscap) == "function" and capped then pcall(setfpscap, 0) end
+        if gui then gui:Destroy() end
+    end)
+end
+
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.7.0",
+    return BPUI:CreateWindow({Version = "1.8.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -3564,7 +4633,45 @@ do
         Callback = function(value) spawner.noAfk = value == true end})
     ui.spawnStatus = spawn:AddLabel({Text = "off", Style = "Sub"})
 
+    local questSection = farmTab:CreateSection("Daily quests")
+    presetToggles.quests = questSection:AddToggle({Name = "Do daily quests", Default = false, Flag = "spawn_quests",
+        Description = "Takes the quests the farm can finish by itself (kills, damage, short combos), best gold first, and respawns you as the character they need. Ranked, wins and anything else are skipped. Needs Auto spawn on to change character.",
+        Callback = function(value) spawner.quests = value == true quests.enabled = value == true end})
+    ui.questStatus = questSection:AddLabel({Text = "off", Style = "Sub"})
+
+    local discord = farmTab:CreateSection("Discord")
+    discord:AddInput({Name = "Webhook link", Placeholder = "https://discord.com/api/webhooks/...", Flag = "webhook_url",
+        Description = "In Discord: channel settings > Integrations > Webhooks > New Webhook > Copy Webhook URL. Anyone with the link can post to that channel, so keep it to yourself.",
+        Callback = function(text)
+            webhook.url = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if webhook.url ~= "" and not webhook.Valid(webhook.url) then
+                pcall(function() BPUI:Notify({Title = "Discord", Content = "That isn't a Discord webhook link.", Type = "Warning", Duration = 4}) end)
+            end
+        end})
+    presetToggles.webhook = discord:AddToggle({Name = "Send farm stats", Default = false, Flag = "webhook_enabled",
+        Description = "Posts kills, deaths, gold, per-hour rates and quest progress to your channel. Totals carry over server hops.",
+        Callback = function(value) webhook.enabled = value == true end})
+    discord:AddSlider({Name = "Every", Min = 5, Max = 120, Default = 30, Increment = 5, Suffix = " min", Flag = "webhook_every",
+        Callback = function(value) webhook.every = tonumber(value) or 30 end})
+    discord:AddToggle({Name = "Also when a quest finishes or it hops", Default = true, Flag = "webhook_events",
+        Callback = function(value) webhook.events = value == true end})
+    discord:AddButton({Name = "Send a report now", ButtonText = "Send", Callback = function()
+        task.spawn(function()
+            local ok = webhook.SendNow()
+            pcall(function() BPUI:Notify({Title = "Discord", Content = ok and "Sent." or webhook.last, Type = ok and "Info" or "Warning", Duration = 4}) end)
+        end)
+    end})
+    ui.webhookStatus = discord:AddLabel({Text = "off", Style = "Sub"})
+
     local night = farmTab:CreateSection("Overnight")
+    presetToggles.leaveAfk = night:AddToggle({Name = "Leave the AFK World", Default = true, Flag = "leave_afk_world",
+        Description = "If the game moves you to its AFK World while you're idle, the hub sends you straight back to a normal server. Needs the hub in your executor's autoexec, so it loads there too.",
+        Callback = function(value)
+            pcall(function()
+                if not isfolder("BPHubABA") then makefolder("BPHubABA") end
+                writefile("BPHubABA/leave_afk_world.txt", value and "on" or "off")
+            end)
+        end})
     presetToggles.hop = night:AddToggle({Name = "Hop when there's nobody to fight", Default = false, Flag = "hop_enabled",
         Description = "Joins another server, picked from the game's server list, once the farm has had no target for a while.",
         Callback = function(value) hop.enabled = value == true end})
@@ -3592,7 +4699,7 @@ do
     end})
     night:AddButton({Name = "Set up for overnight", ButtonText = "Turn on", Style = "Primary", Callback = function()
         applyBest()
-        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "noAfk", "hop", "skipJuggernaut", "bot"}) do
+        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "quests", "noAfk", "leaveAfk", "hop", "skipJuggernaut", "bot"}) do
             local element = presetToggles[key]
             if element then pcall(function() element:Set(true) end) end
         end
@@ -3945,8 +5052,19 @@ do
     end
     local perf = clientTab:CreateSection("Performance")
     perf:AddToggle({Name = "FPS boost", Default = false, Flag = "client_fpsBoost",
-        Description = "Lowest graphics quality and no shadows. Pair it with Remove particles for the most.",
+        Description = "Lowest graphics quality and no shadows. A small gain at most; for a big one, turn off 3D rendering below.",
         Callback = function(value) client.Set("fpsBoost", value) end})
+    perf:AddToggle({Name = "Turn off 3D rendering", Default = false, Flag = "screen_no3d",
+        Description = "The world stops drawing, which takes most of the load off your graphics card. The game, the farm and the menus keep running.",
+        Callback = function(value) screen.no3d = value == true screen.Apply() end})
+    perf:AddDropdown({Name = "Cover the screen", Options = {"Off", "Black", "White"}, Default = "Off", Flag = "screen_cover",
+        Description = "A plain screen over the game, with the farm's kills and gold on it. 3D drawing is switched off underneath, which is where the FPS gain comes from. The hub's menu still opens on top.",
+        Callback = function(value) screen.cover = value or "Off" screen.Apply() end})
+    perf:AddToggle({Name = "Limit FPS", Default = false, Flag = "screen_fps_limit",
+        Description = "Caps the frame rate, so an overnight farm runs cooler. The farm works fine at 30.",
+        Callback = function(value) screen.fpsLimit = value == true screen.Apply() end})
+    perf:AddSlider({Name = "FPS limit", Min = 10, Max = 120, Default = 30, Increment = 5, Suffix = " fps", Flag = "screen_fps",
+        Callback = function(value) screen.fps = tonumber(value) or 30 screen.Apply() end})
     local other = clientTab:CreateSection("Other")
     other:AddToggle({Name = "Streamer mode", Default = false, Flag = "client_streamer",
         Description = "Hides the player list so names don't show on stream.",
@@ -4100,6 +5218,71 @@ do
             return false
         end, true},
         {"UseMode action", "Auto mode (G)", function() return find(player, "PlayerScripts", "BaseContext", "UseMode") ~= nil end, true},
+
+        {"loadstring", "the hub itself", function() return type(loadstring) == "function" end},
+        {"file functions", "saved settings, learning, night totals, last character", function()
+            return type(readfile) == "function" and type(writefile) == "function" and type(isfile) == "function"
+                and type(makefolder) == "function" and type(isfolder) == "function"
+        end},
+        {"BaseContext actions", "Auto Farm (M1, moves, block, dodge, sprint, jump)", function()
+            for _, name in ipairs({"MouseClick", "Move1", "Move2", "Move3", "Move4", "Block", "Dodge", "Run", "MobileJump"}) do
+                if not find(player, "PlayerScripts", "BaseContext", name) then return false end
+            end
+            return true
+        end},
+        {"game's sprint setting", "Auto Farm sprint (reads _G.PlayerSettings.SprintMode)", function()
+            local g = type(getrenv) == "function" and getrenv()._G or _G
+            return g.PlayerSettings ~= nil and g.PlayerSettings.SprintMode ~= nil
+        end, true},
+        {"Auto Farm loop", "Auto Farm", function()
+            if not bot.enabled then return true end
+            return bot.beat ~= nil and os.clock() - bot.beat < 15
+        end, false, function() return "the farm's loop hasn't run for 15 s" end},
+        {"Auto Farm errors", "Auto Farm", function()
+            return not (bot.crashAt and os.clock() - bot.crashAt < 600)
+        end, false, function() return ("hit %d error(s), restarted; last: %s"):format(bot.crashes or 0, tostring(bot.crash)) end},
+        {"Auto Farm dealing damage", "Auto Farm", function()
+
+            if not bot.enabled or spawner.InLobby() or not Game.ownRoot() or bot.target == "none" then return true end
+            local since = session.damageAt or session.started
+            return os.clock() - since < 180
+        end, false, function() return "on and has a target, but no damage dealt in 3 min" end},
+
+        {"Backpack.Input", "Auto spawn, Stay off AFK", function()
+            local backpack = player:FindFirstChildOfClass("Backpack")
+            return backpack ~= nil and backpack:FindFirstChild("Input") ~= nil
+        end},
+        {"HUD lobby line", "Auto spawn (knowing you're in the lobby)", function() return find(player, "PlayerGui", "HUD", "RightBotCorner", "Line1") ~= nil end},
+        {"character menu", "Auto spawn (character names)", function() return #spawner.Characters() > 0 end},
+        {"title screen Play", "Auto spawn after a hop", function()
+            return type(getconnections) == "function" or type(firesignal) == "function" or replicated:FindFirstChild("Loaded") ~= nil
+        end},
+        {"Player.AFK", "Stay off the AFK team", function() return player:FindFirstChild("AFK") ~= nil end, true},
+
+        {"server list", "server hop, Juggernaut skip", function() return replicated:FindFirstChild("Servers") ~= nil end},
+        {"ServerTP remote", "server hop (falls back to a random server)", function() return replicated:FindFirstChild("ServerTP") ~= nil end, true},
+        {"GameMode attribute", "Juggernaut skip", function() return type(workspace:GetAttribute("GameMode")) == "string" end, true},
+        {"queue_on_teleport", "hub coming back after a hop", function() return type(queue_on_teleport) == "function" end},
+
+        {"QuestStuff remote", "Daily quests (taking quests)", function() return replicated:FindFirstChild("QuestStuff") ~= nil end},
+        {"DailyQuest data", "Daily quests (progress, quest character)", function()
+            local quest = find(player, "ReplicatedStats", "DailyQuest")
+            return quest ~= nil and quests.Data() ~= nil
+        end},
+
+        {"web requests", "Discord stats", function()
+            return type(request) == "function" or type(http_request) == "function"
+                or (type(syn) == "table" and type(syn.request) == "function")
+        end},
+        {"Discord sending", "Discord stats", function()
+            return not webhook.enabled or not tostring(webhook.last):find("^Discord said")
+                and not tostring(webhook.last):find("^couldn't send") and not tostring(webhook.last):find("^paste")
+        end, false, function() return "last try: " .. tostring(webhook.last) end},
+
+        {"3D rendering switch", "Turn off 3D rendering", function()
+            return (pcall(function() return RunService.Set3dRenderingEnabled end))
+        end},
+        {"setfpscap", "Limit FPS", function() return type(setfpscap) == "function" end},
     }
 
     local checkSection = miscTab:CreateSection("Self check", {Collapsed = true})
@@ -4108,23 +5291,34 @@ do
     local rows = {}
     for index, check in ipairs(checks) do rows[index] = checkSection:AddLabel({Text = check[1], Style = "Sub"}) end
 
+    local rowText = {}
+    local function setRow(index, text) rows[index]:Set(text) rowText[index] = text end
     local function runChecks()
         local missing, unsure = {}, 0
         for index, check in ipairs(checks) do
             local okCall, passed = pcall(check[3])
             passed = okCall and passed == true
             if passed then
-                rows[index]:Set("ok  " .. check[1])
+                setRow(index, "ok  " .. check[1])
             elseif check[4] then
                 unsure = unsure + 1
-                rows[index]:Set("not found  " .. check[1] .. "  (" .. check[2] .. ", can be normal outside a match)")
+                setRow(index, "not found  " .. check[1] .. "  (" .. check[2] .. ", can be normal outside a match)")
+            elseif check[5] then
+
+                local why = select(2, pcall(check[5]))
+                missing[#missing + 1] = check[2]
+                setRow(index, "PROBLEM  " .. check[1] .. "  ->  " .. tostring(why))
             else
                 missing[#missing + 1] = check[2]
-                rows[index]:Set("MISSING  " .. check[1] .. "  ->  " .. check[2] .. " won't work")
+                setRow(index, "MISSING  " .. check[1] .. "  ->  " .. check[2] .. " won't work")
             end
         end
         local text = #missing == 0 and ("all good" .. (unsure > 0 and (", " .. unsure .. " not found yet") or ""))
-            or (#missing .. " missing: " .. table.concat(missing, ", "))
+            or (#missing .. " problem(s): " .. table.concat(missing, ", "))
+
+        local report = {"Catn Hub ABA self check  ·  " .. executor .. "  ·  " .. os.date("%Y-%m-%d %H:%M")}
+        for index in ipairs(checks) do report[#report + 1] = rowText[index] or "" end
+        state.selfCheckReport = report
         summary:Set(text)
         ui.selfCheck:Set("self check: " .. text)
         state.selfCheck = text
@@ -4132,6 +5326,17 @@ do
     end
     state.RunSelfCheck = runChecks
     checkSection:AddButton({Name = "Run again", Callback = runChecks})
+    checkSection:AddButton({Name = "Copy the report", ButtonText = "Copy", Callback = function()
+        runChecks()
+        local text = table.concat(state.selfCheckReport or {}, "\n")
+        local copy = setclipboard or toclipboard or (syn and syn.write_clipboard)
+        if copy and pcall(copy, text) then
+            pcall(function() BPUI:Notify({Title = "Self check", Content = "Copied. Paste it wherever you're asking for help.", Duration = 3}) end)
+        else
+            pcall(function() BPUI:Notify({Title = "Self check", Content = "This executor can't copy, so the report was printed to the console (F9).", Type = "Warning", Duration = 5}) end)
+            print(text)
+        end
+    end})
 
     task.spawn(function()
         task.wait(3)
@@ -4183,6 +5388,8 @@ task.spawn(function()
             ui.sessionRate:Set(string.format("per hour: %d kills  ·  %d gold", math.floor(session.kills / hours),
                 math.floor(session.gold / hours)))
             ui.hopStatus:Set(hop.last)
+            ui.questStatus:Set(quests.last .. (quests.done > 0 and ("  ·  done: " .. quests.done) or ""))
+            ui.webhookStatus:Set(webhook.last)
             ui.brain:Set(brain.enabled and (brain.Summary() .. "  ·  now: " .. brain.CurrentStyle() .. "  ·  last: " .. brain.last) or "off")
 
             local lines = ui.overview
