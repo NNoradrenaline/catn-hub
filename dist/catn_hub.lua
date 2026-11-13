@@ -1,4 +1,4 @@
--- catn hub v1.13.6
+-- catn hub v1.13.7
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -3617,7 +3617,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.13.6"
+    local version = o.Version or "1.13.7"
     local v = Vanta:Window({
         Title = o.Title,
 
@@ -3813,7 +3813,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.13.6"
+local HUB_VERSION = "1.13.7"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -3824,7 +3824,7 @@ local GAMES = {
         Name = "Anime Battle Arena",
         Key = "aba",
         Icon = "swords",
-        Version = "1.9.2",
+        Version = "1.9.3",
         Detect = function() return game.GameId == 578392296 or game.PlaceId == 1458767429 end,
     },
     {

@@ -4076,8 +4076,10 @@ do
                                 kind = (t2 and SPEED * t2 >= dist + 1) and "double" or nil
                             end
                             if kind == "double" and not arcClear(cell, n, true) then kind = nil end
+
+                            if kind == "jump" and arcClear(cell, n, true) then kind = "double" end
                             if kind then
-                                out[#out + 1] = {to = n, kind = kind, cost = dist + (kind == "jump" and 3 or 6) + (n.danger or 0) * 30}
+                                out[#out + 1] = {to = n, kind = kind, cost = dist + 3 + (n.danger or 0) * 30}
 
                                 if dy > -1.6 then landed = true end
                             end
@@ -4296,9 +4298,9 @@ do
                         stuckPos, stuckAt, stuckJumped = root.Position, os.clock(), false
                     elseif os.clock() - stuckAt > 3 then
                         return "replan"
-                    elseif os.clock() - stuckAt > 1.5 and not stuckJumped and grounded(root) then
+                    elseif os.clock() - stuckAt > 1 and not stuckJumped and grounded(root) then
                         stuckJumped = true
-                        jump(false)
+                        jump(true)
                     end
 
                     for k = j, i, -1 do
@@ -4357,6 +4359,13 @@ do
         obby.runs = obby.runs + 1
         bind()
         local runStarted = os.clock()
+
+        task.spawn(function()
+            while obby.active do
+                pcall(setSprint, true)
+                task.wait(1)
+            end
+        end)
         local ok, err = pcall(function()
             obby.last = "mapping the course"
             if not build(map) then obby.last = "no finish (Won) or nowhere to walk" return end
@@ -4426,6 +4435,7 @@ do
         logResult("course", map, runStarted)
         moveDir = Vector3.zero
         obby.active = false
+        pcall(setSprint, false)
     end
 
     local function indicatorColor(indicator)
@@ -4840,7 +4850,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.9.2",
+    return BPUI:CreateWindow({Version = "1.9.3",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
