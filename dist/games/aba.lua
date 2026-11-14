@@ -891,12 +891,36 @@ end
 
 local autoBlock = {enabled = false, range = 14, hold = 0.45, skipGuardbreaks = true, whileFarming = false,
     faceCheck = true, faceAngle = 75, pingComp = true, reactMs = 0, missChance = 0, letFinisher = false,
-    last = "off", blocks = 0}
+    farmGuard = true, dodgeGuardbreaks = true, last = "off", blocks = 0, dodges = 0}
 state.AutoBlock = autoBlock
 do
     local CollectionService = game:GetService("CollectionService")
     local holdUntil, holding, pressedAt = 0, false, 0
     local watched = setmetatable({}, {__mode = "k"})
+
+    local skills = setmetatable({}, {__mode = "k"})
+    local MOVE_CAP = 4
+    local lastHitAt, lastDodge = -math.huge, -math.huge
+    local dodgeFrom
+
+    local M1_IDS = {["1461128166"] = 1, ["1461128859"] = 2, ["1461136273"] = 3, ["1461136875"] = 4, ["1461137417"] = 5}
+    local FLINCH_IDS = {["1461138523"] = true, ["1461139102"] = true, ["1461140455"] = true, ["1461142361"] = true}
+
+    local function guardOn()
+        if autoBlock.enabled then return true end
+        local bot = state.Bot
+        return autoBlock.farmGuard and bot ~= nil and bot.enabled == true and bot.trade ~= false and alive
+    end
+    autoBlock.GuardOn = guardOn
+
+    autoBlock.Wants = function() return guardOn() and os.clock() < holdUntil end
+
+    local function angleTo(root, mine)
+        local toMe = (mine.Position - root.Position) * Vector3.new(1, 0, 1)
+        local look = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+        if toMe.Magnitude < 2 or look.Magnitude < 0.1 then return 0 end
+        return math.deg(math.acos(math.clamp(look.Unit:Dot(toMe.Unit), -1, 1)))
+    end
 
     local lastOwnAttack = -math.huge
     for _, name in ipairs({"MouseClick", "Move1", "Move2", "Move3", "Move4", "Move5"}) do
@@ -924,11 +948,10 @@ do
     local quietUntil = 0
 
     local function trigger(model, root, seconds, reach, why)
-        if not autoBlock.enabled or not alive or os.clock() < quietUntil then return end
+        if not guardOn() or not alive or os.clock() < quietUntil then return end
         local mine = myRoot()
         if not mine or (root.Position - mine.Position).Magnitude > reach then return end
         if not isEnemy(model) then return end
-        if not autoBlock.whileFarming and state.Bot and state.Bot.enabled then return end
 
         if autoBlock.faceCheck then
             local toMe = (mine.Position - root.Position) * Vector3.new(1, 0, 1)
@@ -948,7 +971,7 @@ do
 
         if autoBlock.pingComp then seconds = seconds + timing.ping end
         local function arm()
-            if not autoBlock.enabled or os.clock() < quietUntil then return end
+            if not guardOn() or os.clock() < quietUntil then return end
             holdUntil = math.max(holdUntil, os.clock() + seconds)
             autoBlock.last = why
         end
@@ -961,14 +984,24 @@ do
     end
 
     local chains = setmetatable({}, {__mode = "k"})
-    local function chainHit(model)
+    local function chainHit(model, index)
         local chain = chains[model]
         if not chain or os.clock() - chain.last > 1 then
             chain = {count = 0}
             chains[model] = chain
         end
-        chain.count = chain.count + 1
+
+        if index then chain.count = index else chain.count = math.min(chain.count + 1, 4) end
         chain.last = os.clock()
+
+        local root, mine = model:FindFirstChild("HumanoidRootPart"), myRoot()
+        if chain.count >= 5 and autoBlock.dodgeGuardbreaks and state.Bot and state.Bot.enabled and dodgeFrom
+            and root and mine and (root.Position - mine.Position).Magnitude < autoBlock.range
+            and os.clock() - lastDodge >= 2.5 then
+            chain.count = 0
+            dodgeFrom(root, mine, "dodging " .. model.Name .. "'s finisher")
+            return true
+        end
         if autoBlock.letFinisher and chain.count >= 5 then
             chain.count = 0
             holdUntil = 0
@@ -987,21 +1020,33 @@ do
         if not (animator and root) then return end
         watched[model] = true
         connect(animator.AnimationPlayed, function(track)
-            if track.Looped or os.clock() - lastOwnAttack < 0.5 then return end
-            if chainHit(model) then return end
+            if track.Looped then return end
+            local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+$")
+            if id and FLINCH_IDS[id] then return end
+
+            if not (id and M1_IDS[id]) and (os.clock() - lastOwnAttack < 0.5 or track.Length > 1.5) then return end
+            if chainHit(model, id and M1_IDS[id]) then return end
             trigger(model, root, autoBlock.hold, autoBlock.range, "blocking an attack from " .. model.Name)
         end)
+        local function skillStarted()
+            local skill = Game.usingSkill(model)
+            if not skill then return end
+            local breaks = breaksGuard(model, skill)
+            skills[model] = {name = skill, at = os.clock(), root = root, breaks = breaks}
+            if autoBlock.skipGuardbreaks and breaks then
+                autoBlock.last = skill .. " breaks guard, not blocking"
+                return
+            end
+            trigger(model, root, 0.35, autoBlock.range * 2, "blocking " .. skill)
+        end
         connect(model.ChildAdded, function(child)
             if child.Name ~= "UsingSkill" or not child:IsA("StringValue") then return end
-            task.defer(function()
-                local skill = Game.usingSkill(model)
-                if not skill then return end
-                if autoBlock.skipGuardbreaks and breaksGuard(model, skill) then
-                    autoBlock.last = skill .. " breaks guard, not blocking"
-                    return
-                end
-                trigger(model, root, 0.8, autoBlock.range * 2, "blocking " .. skill)
-            end)
+            task.defer(skillStarted)
+
+            connect(child:GetPropertyChangedSignal("Value"), function() task.defer(skillStarted) end)
+        end)
+        connect(model.ChildRemoved, function(child)
+            if child.Name == "UsingSkill" then skills[model] = nil end
         end)
     end
 
@@ -1016,8 +1061,81 @@ do
         if action then action:Fire(on) end
     end
 
+    local myHumanoid
+    local function watchMe()
+        local _, humanoid = Game.ownRoot()
+        if not humanoid or humanoid == myHumanoid then return end
+        myHumanoid = humanoid
+        local last = humanoid.Health
+        connect(humanoid.HealthChanged, function(hp)
+            if hp < last - 0.5 then
+                lastHitAt = os.clock()
+                local mine = myRoot()
+                if mine and guardOn() and os.clock() >= quietUntil then
+
+                    if not Game.isBlocking(player.Character) and os.clock() - lastOwnAttack > 0.6 then
+                        holdUntil = math.max(holdUntil, os.clock() + 0.5)
+                        autoBlock.last = "got hit, blocking the rest"
+                    end
+                    for model, s in pairs(skills) do
+                        if model.Parent and s.root.Parent and (s.root.Position - mine.Position).Magnitude < 25 then
+                            s.hitUntil = os.clock() + 1
+                        end
+                    end
+                end
+            end
+            last = hp
+        end)
+    end
+    connect(player.CharacterAdded, function() task.wait(1) watchMe() end)
+
+    dodgeFrom = function(root, mine, why)
+        local action = gameAction("Dodge")
+        if not action or os.clock() - lastDodge < 2.5 then return end
+
+        local character = player.Character
+        if character and (character:FindFirstChild("Action") or character:FindFirstChild("NoDodge")
+            or (character:FindFirstChild("Slow") and not character:FindFirstChild("DodgeOkay"))) then return end
+        local away = (mine.Position - root.Position) * Vector3.new(1, 0, 1)
+        if away.Magnitude < 0.1 then away = mine.CFrame.RightVector end
+        local side = CFrame.Angles(0, math.rad(math.random() < 0.5 and 70 or -70), 0):VectorToWorldSpace(away.Unit)
+        lastDodge = os.clock()
+        autoBlock.dodges = autoBlock.dodges + 1
+        autoBlock.last = why
+        mine.CFrame = CFrame.lookAt(mine.Position, mine.Position + side)
+        task.spawn(function()
+            pcall(function() action:Fire(true) end)
+            task.wait(0.1)
+            pcall(function() action:Fire(false) end)
+        end)
+    end
+
     connect(RunService.Heartbeat, function()
-        local want = autoBlock.enabled and alive and os.clock() < holdUntil and myRoot() ~= nil
+        local mine = myRoot()
+        if guardOn() and mine and os.clock() >= quietUntil then
+            if not myHumanoid or not myHumanoid.Parent then watchMe() end
+            local now = os.clock()
+            local tail = 0.2 + (autoBlock.pingComp and timing.ping or 0)
+            for model, s in pairs(skills) do
+                if not model.Parent or not s.root.Parent then
+                    skills[model] = nil
+                elseif (now - s.at < MOVE_CAP or now < (s.hitUntil or 0)) and isEnemy(model) then
+                    local d = (s.root.Position - mine.Position).Magnitude
+
+                    local aimed = d < 9 or not autoBlock.faceCheck or angleTo(s.root, mine) < 110
+                    if s.breaks and autoBlock.skipGuardbreaks then
+
+                        if autoBlock.dodgeGuardbreaks and d < 24 and aimed and now - s.at < 2 then
+                            dodgeFrom(s.root, mine, "dodging " .. s.name .. " (breaks guard)")
+                        end
+                    elseif d <= autoBlock.range * 2 and aimed then
+                        holdUntil = math.max(holdUntil, now + tail)
+                        autoBlock.last = ("holding block through %s (%.1fs in)"):format(s.name, now - s.at)
+                    end
+                end
+            end
+        end
+        local want = guardOn() and alive and os.clock() < holdUntil and mine ~= nil
         local character = player.Character
         local blocking = character and Game.isBlocking(character)
         if want and not holding then
@@ -1027,7 +1145,10 @@ do
         elseif not want and holding then
             holding = false
             setBlock(false)
-        elseif want and holding and not blocking and os.clock() - pressedAt > 0.2 then
+        elseif want and holding and not blocking and (os.clock() - pressedAt > 0.2
+
+            or (os.clock() - pressedAt > 0.12 and character and not character:FindFirstChild("Action")
+                and not character:FindFirstChild("Slow"))) then
 
             setBlock(false)
             setBlock(true)
@@ -1038,7 +1159,7 @@ do
     autoBlock.SetEnabled = function(value)
         autoBlock.enabled = value == true and alive
         autoBlock.last = autoBlock.enabled and "watching" or "off"
-        if not autoBlock.enabled and holding then
+        if not guardOn() and holding then
             holding = false
             setBlock(false)
         end
@@ -1764,6 +1885,10 @@ do
     local function defend(dummy, rootPart, dist)
         if not bot.trade then return false end
         if os.clock() < trade.blockUntil then return true end
+        if autoBlock.Wants and autoBlock.Wants() then
+            trade.wasBlocking = true
+            return true
+        end
 
         if player.Character and Game.isBlocking(player.Character) then
             trade.wasBlocking = true
@@ -1830,7 +1955,7 @@ do
         end
         if since < 0.2 and trade.swingHit ~= 5 and choice == "block" and dist <= M1_REACH + 2
             and facingMe(dummy, rootPart) and blockAction
-            and not (autoBlock.enabled and autoBlock.whileFarming) then
+            and not autoBlock.GuardOn() then
             trade.swingAt = -math.huge
             local hold = 0.32 + timing.ping
             trade.blockUntil = os.clock() + hold + 0.05
@@ -4850,7 +4975,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.9.3",
+    return BPUI:CreateWindow({Version = "1.10.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -5131,9 +5256,12 @@ do
     human:AddSlider({Name = "Miss chance", Min = 0, Max = 50, Default = 0, Increment = 5, Suffix = " %", Flag = "auto_block_miss",
         Description = "Lets this share of attacks through on purpose.",
         Callback = function(value) autoBlock.missChance = tonumber(value) or 0 end})
-    presetToggles.blockFarm = tuning:AddToggle({Name = "Keep blocking while auto farm runs", Default = false, Flag = "auto_block_farm",
-        Description = "Off: auto block waits while the farm is on, so it doesn't cut your attacks short.",
-        Callback = function(value) autoBlock.whileFarming = value == true end})
+    presetToggles.blockFarm = tuning:AddToggle({Name = "Auto farm blocks too", Default = true, Flag = "auto_block_farm_guard",
+        Description = "The farm blocks every swing and holds block for a move's whole length, even with Auto block off.",
+        Callback = function(value) autoBlock.farmGuard = value == true end})
+    tuning:AddToggle({Name = "Dodge guard breaks and finishers", Default = true, Flag = "auto_block_dodge_gb",
+        Description = "Dashes sideways out of moves that go through block, and out of the farm's 5th M1 hit.",
+        Callback = function(value) autoBlock.dodgeGuardbreaks = value == true end})
     tuning:AddLabel({Text = "the 5th hit of an M1 chain knocks block off for a few seconds; nothing gets around that", Style = "Sub"})
 end
 
@@ -5798,7 +5926,8 @@ task.spawn(function()
             ui.yujiSkull:Set((yuji.skull and yuji.skullLast or "off") .. "  ·  clicks: " .. yuji.skullClicks)
             ui.nanami:Set((nanami.enabled and nanami.last or "off") .. "  ·  hits: " .. nanami.hits)
             ui.kokushibo:Set((kokushibo.enabled and kokushibo.last or "off") .. "  ·  hits: " .. kokushibo.hits)
-            ui.autoBlock:Set((autoBlock.enabled and autoBlock.last or "off") .. "  ·  blocks: " .. autoBlock.blocks)
+            ui.autoBlock:Set((autoBlock.GuardOn() and autoBlock.last or "off") .. "  ·  blocks: " .. autoBlock.blocks
+                .. "  ·  dodges: " .. autoBlock.dodges)
             ui.rejoin:Set(rejoin.last)
             ui.yusuke:Set((yusuke.enabled and yusuke.last or "off") .. "  ·  shots: " .. yusuke.shots)
             ui.krillin:Set((krillin.enabled and krillin.last or "off") .. "  ·  volleys: " .. krillin.volleys)
