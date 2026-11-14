@@ -914,8 +914,10 @@ do
     local FLINCH_IDS = {["1461138523"] = true, ["1461139102"] = true, ["1461140455"] = true, ["1461142361"] = true}
 
     local function guardOn()
-        if autoBlock.enabled then return true end
         local bot = state.Bot
+
+        if bot and bot.passive then return false end
+        if autoBlock.enabled then return true end
         return autoBlock.farmGuard and bot ~= nil and bot.enabled == true and bot.trade ~= false and alive
     end
     autoBlock.GuardOn = guardOn
@@ -2068,6 +2070,11 @@ do
 
     local function attack(dummy, rootPart, dist)
         face(dummy, rootPart)
+
+        if bot.passive then
+            bot.last = "standing in front of " .. dummy.model.Name .. " for its quest"
+            return
+        end
         trade.model = dummy.model
         watchSwings(dummy)
         watchMe()
@@ -4827,6 +4834,10 @@ do
             end
             if os.clock() < hoppingUntil then
 
+            elseif hop.hold then
+
+                idleSince, badSince, smallSince = nil, nil, nil
+                hop.last = "staying put for quest feeding"
             elseif small then
                 idleSince, badSince = nil, nil
                 smallSince = smallSince or os.clock()
@@ -4857,6 +4868,148 @@ do
             end
             task.wait(1)
         end
+    end)
+end
+
+local feed = {enabled = false, role = nil, partner = nil, last = "off", resets = 0, kills = 0}
+state.Feed = feed
+do
+    local HttpService = game:GetService("HttpService")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local FILE = "BPHubABA/feed.json"
+    local FRESH = 30
+    local movedAt = -math.huge
+
+    local function readShared()
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(FILE)) end)
+        return ok and type(data) == "table" and data or {}
+    end
+    local function here() return workspace:GetAttribute("ServerBrowserJobId") or game.JobId end
+
+    local function killQuest()
+        local stats = player:FindFirstChild("ReplicatedStats")
+        local value = stats and stats:FindFirstChild("DailyQuest")
+        if not value then return nil end
+        local ok, data = pcall(HttpService.JSONDecode, HttpService, value.Value)
+        if not ok or type(data) ~= "table" then return nil end
+        local quest = data.Focus and data[data.Focus]
+        if type(quest) ~= "table" or quest.Finished or type(quest.Requirements) ~= "table" then return nil end
+        local left = tonumber(quest.Requirements.Kills)
+        if not left or left <= 0 then return nil end
+        return left, quest.Requirements.Character
+    end
+
+    local function quietServer()
+        local folder = ReplicatedStorage:FindFirstChild("Servers")
+        if not folder then return nil end
+        local best
+        for _, server in ipairs(folder:GetChildren()) do
+            local players = tonumber(server:GetAttribute("PlayerCount")) or 99
+            local max = tonumber(server:GetAttribute("MaxPlayers")) or 0
+            if server.Name ~= here() and server:GetAttribute("Type") == "Public" and players <= 2 and players <= max - 2
+                and (not best or players < best.players) then
+                best = {id = server.Name, players = players}
+            end
+        end
+        return best
+    end
+    local function goTo(id, why)
+        if os.clock() - movedAt < 40 then return end
+        local remote = ReplicatedStorage:FindFirstChild("ServerTP")
+        if not remote then return end
+        movedAt = os.clock()
+        feed.last = why
+        if rejoin.loader ~= "" and type(queue_on_teleport) == "function" then pcall(queue_on_teleport, rejoin.loader) end
+        pcall(function() remote:FireServer(id) end)
+    end
+
+    local function release()
+        if feed.role then
+            bot.onlyPlayer, bot.passive, hop.hold = nil, false, false
+            feed.role, feed.partner = nil, nil
+        end
+    end
+
+    local function watchMine(character)
+        local humanoid = character:WaitForChild("Humanoid", 10)
+        if not humanoid then return end
+        local last = humanoid.Health
+        connect(humanoid.HealthChanged, function(hp)
+            local hurt = hp < last - 0.5
+            last = hp
+            if not hurt or hp <= 0 or feed.role ~= "victim" or not feed.partner then return end
+            local partner = Players:FindFirstChild(feed.partner)
+            local theirs = partner and Game.aliveRoot(partner.Character)
+            local mine = Game.ownRoot()
+            if theirs and mine and (theirs.Position - mine.Position).Magnitude < 30 then
+                feed.resets = feed.resets + 1
+                humanoid.Health = 0
+            end
+        end)
+    end
+    if player.Character then task.spawn(watchMine, player.Character) end
+    connect(player.CharacterAdded, function(character) task.spawn(watchMine, character) end)
+
+    task.spawn(function()
+        while alive do
+            if not (feed.enabled and correctGame) then
+                release()
+                feed.last = feed.enabled and "only works in ABA" or "off"
+            else
+                local left, wantChar = killQuest()
+
+                local shared = readShared()
+                shared[player.Name] = {at = os.time(), job = here(), needs = left ~= nil, left = left, char = wantChar}
+                pcall(function() writefile(FILE, HttpService:JSONEncode(shared)) end)
+
+                local partnerName, partnerInfo
+                for name, info in pairs(shared) do
+                    if name ~= player.Name and type(info) == "table" and os.time() - (tonumber(info.at) or 0) < FRESH then
+                        partnerName, partnerInfo = name, info
+                    end
+                end
+                local role
+                if left and partnerName then
+
+                    role = (partnerInfo.needs and partnerName < player.Name) and "victim" or "killer"
+                elseif partnerName and partnerInfo.needs then
+                    role = "victim"
+                end
+                if not role then
+                    release()
+                    feed.last = partnerName and ("with " .. partnerName .. ", no kill quest to finish") or "waiting for your other account (turn this on there too)"
+                else
+                    feed.role, feed.partner = role, partnerName
+                    hop.hold = true
+                    local partnerHere = Players:FindFirstChild(partnerName) ~= nil
+                    local crowd = #Players:GetPlayers()
+                    if role == "killer" then
+                        bot.onlyPlayer, bot.passive = partnerName, false
+                        local mine = Game.characterName(player)
+                        if wantChar and mine ~= wantChar then
+                            feed.last = ("quest wants %s, you're %s (Do daily quests switches you)"):format(wantChar, mine)
+                        elseif crowd > 4 then
+                            local quiet = quietServer()
+                            if quiet then goTo(quiet.id, ("%d people here, moving to a quiet server (%d)"):format(crowd, quiet.players))
+                            else feed.last = "no quiet server free, feeding here" end
+                        elseif not partnerHere then
+                            feed.last = "waiting for " .. partnerName .. " to join"
+                        else
+                            feed.last = ("hunting %s: %d quest kills to go"):format(partnerName, left)
+                        end
+                    else
+                        bot.onlyPlayer, bot.passive = partnerName, true
+                        if not partnerHere and partnerInfo.job and partnerInfo.job ~= here() then
+                            goTo(partnerInfo.job, "joining " .. partnerName .. "'s server")
+                        else
+                            feed.last = ("feeding %s (%s left), resets: %d"):format(partnerName, tostring(partnerInfo.left or "?"), feed.resets)
+                        end
+                    end
+                end
+            end
+            task.wait(3)
+        end
+        release()
     end)
 end
 
@@ -5073,7 +5226,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.11.1",
+    return BPUI:CreateWindow({Version = "1.12.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -5233,6 +5386,10 @@ do
         Description = "Takes the quests the farm can finish by itself (kills, damage, short combos), best gold first, and respawns you as the character they need. Ranked, wins and anything else are skipped. Needs Auto spawn on to change character.",
         Callback = function(value) spawner.quests = value == true quests.enabled = value == true end})
     ui.questStatus = questSection:AddLabel({Text = "off", Style = "Sub"})
+    presetToggles.feed = questSection:AddToggle({Name = "Feed kill quests with my other account", Tag = "Experimental", Default = false, Flag = "quest_feed",
+        Description = "Turn this on in two of your accounts on this PC. When one gets a \"Get N kills as X\" quest, both move to a quiet server, the other walks up to it and resets the moment it's hit, and every reset counts as a quest kill (about one every 12 seconds). Repeat kills pay no gold, only the quest does. Needs Auto farm and Do daily quests on.",
+        Callback = function(value) feed.enabled = value == true end})
+    ui.feedStatus = questSection:AddLabel({Text = "off", Style = "Sub"})
 
     local minigames = farmTab:CreateSection("Minigames")
     presetToggles.minigames = minigames:AddToggle({Name = "Play minigames", Tag = "Experimental", Default = false, Flag = "minigames_auto",
@@ -6002,6 +6159,7 @@ task.spawn(function()
                 math.floor(session.gold / hours)))
             ui.hopStatus:Set(hop.last)
             ui.questStatus:Set(quests.last .. (quests.done > 0 and ("  ·  done: " .. quests.done) or ""))
+            ui.feedStatus:Set(feed.last .. (feed.role and ("  ·  " .. feed.role) or ""))
             ui.minigameStatus:Set((obby.enabled and (obby.last == "off" and "waiting for a minigame" or obby.last) or "off") .. (obby.finishes > 0 and ("  ·  finished: " .. obby.finishes) or ""))
             ui.webhookStatus:Set(webhook.last)
             ui.brain:Set(brain.enabled and (brain.Summary() .. "  ·  now: " .. brain.CurrentStyle() .. "  ·  last: " .. brain.last) or "off")
