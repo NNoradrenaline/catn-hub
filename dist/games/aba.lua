@@ -3683,6 +3683,12 @@ do
     end
     local pressedAt, afkAt, lobbySince = 0, 0, nil
 
+    local charAddedAt = os.clock()
+    connect(player.CharacterAdded, function()
+        charAddedAt = os.clock()
+        lobbySince = nil
+    end)
+
     local function hud() return player:FindFirstChildOfClass("PlayerGui") and player.PlayerGui:FindFirstChild("HUD") end
     local function input()
         local backpack = player:FindFirstChildOfClass("Backpack")
@@ -3705,7 +3711,7 @@ do
         if holder then
             for _, button in ipairs(holder:GetDescendants()) do
 
-                if button:IsA("ImageButton") and button.Name ~= "Icon" and not seen[button.Name]
+                if button:IsA("ImageButton") and button.Name ~= "Icon" and not seen[button.Name] and button.Visible
                     and not button:GetAttribute("TestPlaceOnly") and button.ImageColor3.R > 0.5
                     and os.clock() > (spawner.failed[button.Name] or 0) then
                     seen[button.Name] = true
@@ -3730,9 +3736,16 @@ do
         return wanted, quest.Description
     end
 
+    local function trulyRandom() return workspace:GetAttribute("SpecialRound") == "Truly Random" end
+    spawner.TrulyRandom = trulyRandom
+
     local function pick()
         local wanted = spawner.character:lower():gsub("^%s+", ""):gsub("%s+$", "")
         local names = spawner.Characters()
+        if trulyRandom() then
+            for _, name in ipairs(names) do if name == "Random" then return name end end
+            for _, name in ipairs(names) do if name:find("Random") then return name end end
+        end
 
         if #names == 0 and next(spawner.failed) then
             table.clear(spawner.failed)
@@ -3754,9 +3767,11 @@ do
         local function fallback()
 
             local last = player:GetAttribute("LastLoadedChar")
-            if #names == 0 then return last ~= "" and last or nil end
-            for _, name in ipairs(names) do if name == last then return name end end
+            if last == spawner.randomChar then last = nil end
+            if #names == 0 then return (spawner.lastSpawned ~= "" and spawner.lastSpawned) or (last ~= "" and last) or nil end
             for _, name in ipairs(names) do if name == spawner.lastSpawned then return name end end
+            for _, name in ipairs(names) do if name == last then return name end end
+            for _, name in ipairs(names) do if not name:find("Random") then return name end end
             return names[1]
         end
         if wanted == "" then return fallback() end
@@ -3819,7 +3834,7 @@ do
                         spawner.last = "no character called \"" .. spawner.character .. "\""
                     elseif browsing and not spawner.openedMenu then
                         spawner.last = "waiting, the character menu is open"
-                    elseif os.clock() - lobbySince > 1 and os.clock() - pressedAt > 4 then
+                    elseif os.clock() - lobbySince > 2.5 and os.clock() - charAddedAt > 4 and os.clock() - pressedAt > 4 then
 
                         pressedAt = os.clock()
 
@@ -3832,12 +3847,16 @@ do
                             spawner.tries = {name = name, count = 1}
                         end
                         if spawner.tries and spawner.tries.count > 3 then
-                            spawner.failed[name] = os.clock() + 600
+
+                            local typed = spawner.character:lower():gsub("^%s+", ""):gsub("%s+$", "")
+                            local yours = typed ~= "" and name:lower():sub(1, #typed) == typed
+                            spawner.failed[name] = os.clock() + (yours and 60 or 600)
                             spawner.tries = nil
                             name = pick() or name
                         end
                         spawner.last = (roundOn and "spawning as " or "waiting for the round to start, then ") .. name
                         spawner.openedMenu = true
+                        spawner.pressed = name
                         remote:FireServer("CharacterOpen")
                         task.wait(0.35)
                         remote:FireServer("CharacterButton", name)
@@ -3848,8 +3867,18 @@ do
                     lobbySince = nil
                     spawner.openedMenu = false
                     spawner.tries = nil
-                    spawner.last = "in a match"
-                    rememberCharacter(player:GetAttribute("LastLoadedChar"))
+                    if trulyRandom() then
+                        spawner.last = "in a match (Truly Random round, back to your character after it)"
+                        spawner.randomChar = player:GetAttribute("LastLoadedChar")
+                    else
+                        spawner.last = "in a match"
+                        local now = player:GetAttribute("LastLoadedChar")
+
+                        if now ~= spawner.randomChar or now == spawner.pressed then
+                            spawner.randomChar = nil
+                            rememberCharacter(now)
+                        end
+                    end
                 end
             elseif not spawner.enabled then
                 lobbySince = nil
@@ -5226,7 +5255,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.12.1",
+    return BPUI:CreateWindow({Version = "1.12.2",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
