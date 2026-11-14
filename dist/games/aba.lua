@@ -1636,6 +1636,15 @@ do
 
     local function dummies()
         local list = {}
+
+        if bot.onlyPlayer and bot.onlyPlayer ~= "" then
+            local only = Players:FindFirstChild(bot.onlyPlayer)
+            if only and only:IsA("Player") and only ~= player then
+                local root, humanoid = Game.aliveRoot(only.Character)
+                if root then list[1] = {model = only.Character, root = root, humanoid = humanoid, player = only} end
+            end
+            return list
+        end
         if bot.targets ~= "Dummies" then
             for _, targetPlayer in ipairs(Players:GetPlayers()) do
                 if targetPlayer ~= player and Game.teamAllows(targetPlayer, bot.teamMode)
@@ -5064,7 +5073,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.11.0",
+    return BPUI:CreateWindow({Version = "1.11.1",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
