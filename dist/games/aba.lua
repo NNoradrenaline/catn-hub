@@ -903,6 +903,13 @@ do
     local lastHitAt, lastDodge = -math.huge, -math.huge
     local dodgeFrom
 
+    local endedAt = setmetatable({}, {__mode = "k"})
+    autoBlock.InEndLag = function(model) return os.clock() - (endedAt[model] or -math.huge) < 0.7 end
+    autoBlock.MidMove = function(model)
+        local s = skills[model]
+        return s ~= nil and os.clock() - s.at < MOVE_CAP, s and s.breaks
+    end
+
     local M1_IDS = {["1461128166"] = 1, ["1461128859"] = 2, ["1461136273"] = 3, ["1461136875"] = 4, ["1461137417"] = 5}
     local FLINCH_IDS = {["1461138523"] = true, ["1461139102"] = true, ["1461140455"] = true, ["1461142361"] = true}
 
@@ -1046,7 +1053,10 @@ do
             connect(child:GetPropertyChangedSignal("Value"), function() task.defer(skillStarted) end)
         end)
         connect(model.ChildRemoved, function(child)
-            if child.Name == "UsingSkill" then skills[model] = nil end
+            if child.Name == "UsingSkill" then
+                skills[model] = nil
+                endedAt[model] = os.clock()
+            end
         end)
     end
 
@@ -1178,7 +1188,7 @@ do
     local dirty, savedAt = false, os.clock()
 
     local function blank()
-        return {v = 1, fights = 0, moves = {}, styles = {}, trades = {}, players = {},
+        return {v = 1, fights = 0, moves = {}, styles = {}, trades = {}, players = {}, mine = {},
             score = {learned = {n = 0, dealt = 0, taken = 0, secs = 0, kills = 0, deaths = 0},
                 plain = {n = 0, dealt = 0, taken = 0, secs = 0, kills = 0, deaths = 0}}}
     end
@@ -1189,7 +1199,8 @@ do
             if type(data) == "table" and data.v == 1 then brain.data = data end
         end
     end)
-    for _, key in ipairs({"moves", "styles", "trades", "players"}) do brain.data[key] = brain.data[key] or {} end
+
+    for _, key in ipairs({"moves", "styles", "trades", "players", "mine"}) do brain.data[key] = brain.data[key] or {} end
     brain.data.score = brain.data.score or blank().score
 
     local function rate(sc)
@@ -1337,6 +1348,12 @@ do
         sc.n, sc.dealt, sc.taken, sc.secs = sc.n + 1, sc.dealt + f.dealt, sc.taken + f.taken, sc.secs + seconds
         if reason == "kill" then sc.kills = sc.kills + 1 end
         if reason == "died" then sc.deaths = sc.deaths + 1 end
+        if f.me and f.me ~= "" then
+            local me = entry(brain.data.mine, f.me, function() return {n = 0, dealt = 0, taken = 0, secs = 0, kills = 0, deaths = 0} end)
+            me.n, me.dealt, me.taken, me.secs = me.n + 1, me.dealt + f.dealt, me.taken + f.taken, me.secs + seconds
+            if reason == "kill" then me.kills = me.kills + 1 end
+            if reason == "died" then me.deaths = me.deaths + 1 end
+        end
         local reward = (f.dealt - f.taken) / math.max(seconds, 4) / 6
         if reason == "kill" then reward = reward + 1 end
         if reason == "died" then reward = reward - 1 end
@@ -1403,7 +1420,7 @@ do
             plainFight = math.random() < 0.2
             local enemy = charOf(target.model)
             fight = {model = target.model, player = target.player, enemy = enemy, style = brain.ChooseStyle(enemy), plain = plainFight,
-                started = os.clock(), dealt = 0, taken = 0, lastHit = os.clock()}
+                started = os.clock(), dealt = 0, taken = 0, lastHit = os.clock(), me = myChar()}
         end
         return fight.style
     end
@@ -1453,6 +1470,56 @@ do
         if not pr or pr.fights < 2 then return 0 end
         local edge = (pr.dealt - pr.taken) / math.max(pr.fights, 1) / 30 + (pr.kills - pr.deaths) * 0.5
         return math.clamp(-edge * 10, -15, 30)
+    end
+
+    local TRIAL, TRIAL_POOL = 20, 8
+    local function moveDamage(name)
+        local mv = brain.data.moves[name]
+        if not mv then return 0 end
+        local n, d = 0, 0
+        for _, m in pairs(mv) do n = n + (m.n or 0) d = d + (m.dmg or 0) end
+        return n >= 10 and d / n or 0
+    end
+    function brain.CharacterScore(name)
+        local me = brain.data.mine[name]
+        return me and me.n > 0 and rate(me) or nil, me and me.n or 0
+    end
+    function brain.BestCharacter(owned)
+        local real = {}
+
+        for _, name in ipairs(owned) do if not name:lower():find("random") then real[#real + 1] = name end end
+        owned = real
+        if #owned == 0 then return nil, "no characters" end
+        local sorted = table.clone(owned)
+        table.sort(sorted, function(a, b) return moveDamage(a) > moveDamage(b) end)
+        local trial, trialN
+        for i, name in ipairs(sorted) do
+            local _, n = brain.CharacterScore(name)
+            if i <= TRIAL_POOL and n < TRIAL and (not trialN or n > trialN) then trial, trialN = name, n end
+        end
+        if trial then return trial, ("trying %s (%d/%d fights)"):format(trial, trialN, TRIAL) end
+        local best, bestRate
+        for _, name in ipairs(owned) do
+            local r, n = brain.CharacterScore(name)
+            if r and n >= TRIAL and (not bestRate or r > bestRate) then best, bestRate = name, r end
+        end
+        if best then return best, ("best: %s (%+.2f a second)"):format(best, bestRate) end
+        return sorted[1], "no scores yet"
+    end
+
+    function brain.CharacterTable(limit)
+        local rows = {}
+        for name, me in pairs(brain.data.mine) do
+            if me.n >= 3 then rows[#rows + 1] = {name = name, rate = rate(me) or 0, me = me} end
+        end
+        table.sort(rows, function(a, b) return a.rate > b.rate end)
+        local lines = {}
+        for i = 1, math.min(limit or 8, #rows) do
+            local r = rows[i]
+            lines[#lines + 1] = ("%d. %s  %+.2f/s  ·  %d kills, %d deaths, %d fights"):format(i, r.name, r.rate,
+                r.me.kills, r.me.deaths, r.me.n)
+        end
+        return #lines > 0 and table.concat(lines, "\n") or "no character has 3 scored fights yet"
     end
 
     function brain.Summary()
@@ -1594,8 +1661,23 @@ do
         return list
     end
 
+    local crowdList = {}
+    local function situation(dummy)
+        local extra = 0
+        local here = dummy.root.Position
+        for _, other in ipairs(crowdList) do
+            if other.model ~= dummy.model and (other.root.Position - here).Magnitude < 14 then extra = extra + 6 end
+        end
+        if autoBlock.InEndLag and autoBlock.InEndLag(dummy.model) then extra = extra - 10 end
+        if autoBlock.MidMove then
+            local mid, breaks = autoBlock.MidMove(dummy.model)
+            if mid and breaks then extra = extra + 8 end
+        end
+        return math.min(extra, 30)
+    end
     local function cost(dummy, from)
         local distance = (dummy.root.Position - from).Magnitude + (bot.learn and brain.PlayerCost(dummy.player) or 0)
+            + (bot.smart and situation(dummy) or 0)
         if bot.targetMode == "nearest" then
 
             local hp = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
@@ -1608,7 +1690,8 @@ do
 
     local function pickTarget(from)
         local best, bestCost
-        for _, dummy in ipairs(dummies()) do
+        crowdList = dummies()
+        for _, dummy in ipairs(crowdList) do
             if os.clock() > (blocked[dummy.model] or 0) then
                 local value = cost(dummy, from)
                 if not bestCost or value < bestCost then best, bestCost = dummy, value end
@@ -1989,7 +2072,8 @@ do
         local style = brain.Fight(dummy)
 
         local comboReady = os.clock() - trade.landedAt < 0.8 or dist > M1_REACH
-        if bot.useMoves and dist <= bot.reach and os.clock() - lastMove > 1 and (style ~= "combo" or comboReady) then
+
+        local punish = autoBlock.InEndLag ~= nil and autoBlock.InEndLag(dummy.model)        if bot.useMoves and dist <= bot.reach and os.clock() - lastMove > 1 and (style ~= "combo" or comboReady or punish) then
             local index = readyMove(blocking, dist)
             if index then
                 lastMove = os.clock()
@@ -1999,7 +2083,7 @@ do
             end
         end
 
-        if style == "counter" and os.clock() - trade.landedAt > 0.6 and os.clock() - trade.swingAt > 0.6 then
+        if style == "counter" and not punish and os.clock() - trade.landedAt > 0.6 and os.clock() - trade.swingAt > 0.6 then
             trade.idleSince = trade.idleSince or os.clock()
             if os.clock() - trade.idleSince < 1.5 then return end
         else
@@ -3646,6 +3730,11 @@ do
                 for _, name in ipairs(names) do if name:lower():sub(1, #q) == q then return name end end
             end
         end
+        if spawner.best and #names > 0 then
+            local name, why = brain.BestCharacter(names)
+            spawner.bestWhy = why
+            if name then return name end
+        end
         local function fallback()
 
             local last = player:GetAttribute("LastLoadedChar")
@@ -4975,7 +5064,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.10.0",
+    return BPUI:CreateWindow({Version = "1.11.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -5101,6 +5190,8 @@ do
         Description = "Keeps score of which moves land, which fight style works against each character, whether to block or trade, and who keeps beating you, then leans toward what works. Saved, so it keeps improving across servers.",
         Callback = function(value) brain.enabled = value == true bot.learn = brain.enabled end})
     ui.brain = learn:AddLabel({Text = "-", Style = "Sub"})
+    learn:AddLabel({Text = "Your characters, best first (score per fight-second):", Style = "Sub"})
+    ui.charRanking = learn:AddLabel({Text = "-", Style = "Sub"})
     learn:AddButton({Name = "Forget what it learned", ButtonText = "Reset", Style = "Danger", Callback = function()
         brain.Reset()
         pcall(function() BPUI:Notify({Title = "Learning", Content = "Starting from scratch.", Duration = 3}) end)
@@ -5120,6 +5211,9 @@ do
                 pcall(function() BPUI:Notify({Title = "Auto spawn", Content = "No character called \"" .. spawner.character .. "\" in the menu", Type = "Warning", Duration = 3}) end)
             end
         end})
+    presetToggles.best = spawn:AddToggle({Name = "Play my best character", Tag = "Experimental", Default = false, Flag = "spawn_best",
+        Description = "Gives each of your characters a 20-fight trial (the 8 whose moves hit hardest first), scores what the farm does with each, then sticks to the best. Overrides the name above; daily quests still come first.",
+        Callback = function(value) spawner.best = value == true end})
     presetToggles.noAfk = spawn:AddToggle({Name = "Stay off the AFK team", Default = false, Flag = "spawn_no_afk",
         Description = "If the game marks you AFK, presses the afk button again to come back.",
         Callback = function(value) spawner.noAfk = value == true end})
@@ -5205,7 +5299,7 @@ do
     end})
     night:AddButton({Name = "Set up for overnight", ButtonText = "Turn on", Style = "Primary", Callback = function()
         applyBest()
-        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "quests", "noAfk", "leaveAfk", "hop", "lowPop", "skipJuggernaut", "bot"}) do
+        for _, key in ipairs({"antiAfk", "rejoin", "block", "blockFarm", "spawn", "quests", "noAfk", "leaveAfk", "hop", "lowPop", "skipJuggernaut", "best", "bot"}) do
             local element = presetToggles[key]
             if element then pcall(function() element:Set(true) end) end
         end
@@ -5915,7 +6009,8 @@ task.spawn(function()
             lines.krillin:Set("Krillin: kiblast " .. onOff(krillin.enabled))
 
             ui.botStatus:Set(bot.enabled and (bot.last .. "  ·  target: " .. bot.target) or "off")
-            ui.spawnStatus:Set(spawner.last)
+            ui.spawnStatus:Set(spawner.last .. ((spawner.best and spawner.bestWhy) and ("  ·  " .. spawner.bestWhy) or ""))
+            if ui.charRanking then ui.charRanking:Set(brain.CharacterTable(8)) end
             ui.macro:Set(macro.last .. ((#macro.events > 0 and not macro.recording) and ("  ·  " .. macro.Summary()) or ""))
             ui.espStatus:Set(esp.enabled and (esp.shown .. " players shown") or "off")
             ui.compStatus:Set(comp.enabled and ("focus: " .. (comp.focus or "none")) or "off")
