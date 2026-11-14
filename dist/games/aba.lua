@@ -5226,7 +5226,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.12.0",
+    return BPUI:CreateWindow({Version = "1.12.1",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -5666,8 +5666,8 @@ end
 local skillsTab = window:CreateTab({Name = "Skills", Icon = "sparkles"})
 do
     local main = skillsTab:CreateSection("Move sweeps")
-    local sweepToggle = addToggle(main, {Name = "Move sweeps", Default = false, Flag = "sweeps_enabled",
-        Description = "After you use one of the moves below, its projectile is walked through every target in range, nearest first.",
+    local sweepToggle = addToggle(main, {Name = "Move sweeps", Tag = {Text = "Ban risk", Tone = "Bad"}, Default = false, Flag = "sweeps_enabled",
+        Description = "After you use one of the moves below, its projectile is walked through every target in range, nearest first. Hits people far away, which other players notice and report, so it's the riskiest thing here.",
         Callback = function(value) sweeps.enabled = value == true and correctGame end})
     if not correctGame then sweepToggle:Lock() end
     main:AddKeybind({Name = "Keybind", Default = Enum.KeyCode.Home, Mode = "Press", Flag = "sweeps_key",
