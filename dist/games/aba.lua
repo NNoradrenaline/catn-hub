@@ -1494,10 +1494,21 @@ do
         if #owned == 0 then return nil, "no characters" end
         local sorted = table.clone(owned)
         table.sort(sorted, function(a, b) return moveDamage(a) > moveDamage(b) end)
+
+        local leader, leaderRate
+        for _, name in ipairs(owned) do
+            local r, n = brain.CharacterScore(name)
+            local me = brain.data.mine[name]
+            if r and n >= TRIAL and me and me.kills > me.deaths and (not leaderRate or r > leaderRate) then
+                leader, leaderRate = name, r
+            end
+        end
+        local clearLead = leaderRate and leaderRate > 3
         local trial, trialN
         for i, name in ipairs(sorted) do
-            local _, n = brain.CharacterScore(name)
-            if i <= TRIAL_POOL and n < TRIAL and (not trialN or n > trialN) then trial, trialN = name, n end
+            local r, n = brain.CharacterScore(name)
+            local promising = not clearLead or (n >= 5 and r and r >= leaderRate * 0.7)
+            if i <= TRIAL_POOL and n < TRIAL and promising and (not trialN or n > trialN) then trial, trialN = name, n end
         end
         if trial then return trial, ("trying %s (%d/%d fights)"):format(trial, trialN, TRIAL) end
         local best, bestRate
@@ -1673,6 +1684,8 @@ do
     end
 
     local crowdList = {}
+
+    local hitBy = {}
     local function situation(dummy)
         local extra = 0
         local here = dummy.root.Position
@@ -1689,10 +1702,21 @@ do
     local function cost(dummy, from)
         local distance = (dummy.root.Position - from).Magnitude + (bot.learn and brain.PlayerCost(dummy.player) or 0)
             + (bot.smart and situation(dummy) or 0)
+        if bot.smart then
+
+            local hitAt = hitBy[dummy.model.Name]
+            if hitAt and os.clock() - hitAt < 3 then distance = distance - 14 end
+
+            local _, mine = Game.ownRoot()
+            if mine and mine.Health / math.max(mine.MaxHealth, 1) < 0.35
+                and dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1) > 0.7 then
+                distance = distance + 15
+            end
+        end
         if bot.targetMode == "nearest" then
 
             local hp = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
-            return distance - (hp < 0.35 and 12 or 0)
+            return distance - (1 - hp) * 16 - (hp < 0.25 and 16 or 0)
         end
         local speed = (dummy.root.AssemblyLinearVelocity * Vector3.new(1, 0, 1)).Magnitude
         local health = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
@@ -1960,6 +1984,11 @@ do
             if hp < last - 0.5 then
                 table.insert(trade.hitsOnMe, os.clock())
                 if #trade.hitsOnMe > 8 then table.remove(trade.hitsOnMe, 1) end
+
+                local character = humanoid.Parent
+                local lastHit = character and character:FindFirstChild("LastHit")
+                local ok, by = pcall(function() return lastHit and lastHit.Value end)
+                if ok and by then hitBy[by.Name] = os.clock() end
             end
             last = hp
         end)
@@ -2089,7 +2118,10 @@ do
 
         local comboReady = os.clock() - trade.landedAt < 0.8 or dist > M1_REACH
 
-        local punish = autoBlock.InEndLag ~= nil and autoBlock.InEndLag(dummy.model)        if bot.useMoves and dist <= bot.reach and os.clock() - lastMove > 1 and (style ~= "combo" or comboReady or punish) then
+        local punish = autoBlock.InEndLag ~= nil and autoBlock.InEndLag(dummy.model)
+
+        local finishing = bot.smart and dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1) < 0.3
+        if bot.useMoves and dist <= bot.reach and os.clock() - lastMove > 1 and (style ~= "combo" or comboReady or punish or finishing) then
             local index = readyMove(blocking, dist)
             if index then
                 lastMove = os.clock()
@@ -2099,7 +2131,7 @@ do
             end
         end
 
-        if style == "counter" and not punish and os.clock() - trade.landedAt > 0.6 and os.clock() - trade.swingAt > 0.6 then
+        if style == "counter" and not punish and not finishing and os.clock() - trade.landedAt > 0.6 and os.clock() - trade.swingAt > 0.6 then
             trade.idleSince = trade.idleSince or os.clock()
             if os.clock() - trade.idleSince < 1.5 then return end
         else
@@ -2150,7 +2182,7 @@ do
         local lastNearestCheck = 0
         local stuckFrom, stuckAt, jumps = nil, os.clock(), 0
         local fightTarget, fightStart = nil, 0
-        local chaseTarget, chaseStart = nil, 0
+        local chaseTarget, chaseStart, chaseDist0 = nil, 0, nil
         local failStreak = 0
         local jumpedAt = nil
         local skipAt = 0
@@ -2215,6 +2247,13 @@ do
                             local engaged = os.clock() - (damagedAt[pathTarget.model] or -math.huge) < 2.5 or hp < 0.35
                             local margin = engaged and math.max(10, current * 0.5) or math.max(2, current * 0.15)
                             if current - other > margin then keep = false end
+
+                            local otherHp = best.humanoid.Health / math.max(best.humanoid.MaxHealth, 1)
+                            local otherDist = (best.root.Position - rootPart.Position).Magnitude
+                            if bot.smart and otherHp < 0.25 and otherDist < 22 and hp > otherHp + 0.15 then
+                                keep = false
+                                bot.executes = (bot.executes or 0) + 1
+                            end
                         end
                     end
                 elseif keep and os.clock() - lastNearestCheck > 0.5 and os.clock() - chaseStart > 1.5 then
@@ -2231,6 +2270,17 @@ do
                     blocked[pathTarget.model] = os.clock() + 6
                     bot.last = pathTarget.model.Name .. " keeps getting away, switching"
                     keep, chaseTarget = false, nil
+                end
+
+                if keep and bot.smart and bot.targetMode == "nearest" and chaseTarget == pathTarget.model and chaseDist0 then
+                    local hp = pathTarget.humanoid.Health / math.max(pathTarget.humanoid.MaxHealth, 1)
+                    local d = ((pathTarget.root.Position - rootPart.Position) * Vector3.new(1, 0, 1)).Magnitude
+                    if os.clock() - chaseStart > (hp < 0.3 and 10 or 6) and d > M1_REACH + 2 and d > chaseDist0 * 0.75 then
+                        blocked[pathTarget.model] = os.clock() + 6
+                        bot.chasesDropped = (bot.chasesDropped or 0) + 1
+                        bot.last = pathTarget.model.Name .. " keeps getting away, switching"
+                        keep, chaseTarget = false, nil
+                    end
                 end
                 local dummy = keep and pathTarget or pickTarget(rootPart.Position)
                 if not dummy or failStreak >= 3 then
@@ -2275,7 +2325,7 @@ do
                     local dist = gap.Magnitude
                     local level = math.abs(dummy.root.Position.Y - rootPart.Position.Y) < 8
                     watch(dummy)
-                    if chaseTarget ~= dummy.model then chaseTarget, chaseStart = dummy.model, os.clock() end
+                    if chaseTarget ~= dummy.model then chaseTarget, chaseStart, chaseDist0 = dummy.model, os.clock(), dist end
                     local above = dummy.root.Position.Y - rootPart.Position.Y
                     if dist <= M1_REACH and not level and above > 0 then
                         aboveSince[dummy.model] = aboveSince[dummy.model] or os.clock()
@@ -2292,7 +2342,7 @@ do
                     elseif dist <= M1_REACH and not level and above > 0 and above < 17 then
 
                         path = nil
-                        chaseStart = os.clock()
+                        chaseStart, chaseDist0 = os.clock(), M1_REACH + 2
                         local _, grounded = feetY(rootPart)
                         if grounded then jump(above > SINGLE_JUMP + 1) end
                         local to = (dummy.root.Position - rootPart.Position) * Vector3.new(1, 0, 1)
@@ -2302,7 +2352,7 @@ do
                     elseif dist <= M1_REACH and level then
 
                         path = nil
-                        chaseStart = os.clock()
+                        chaseStart, chaseDist0 = os.clock(), M1_REACH + 2
                         sprintFor(dist)
                         if fightTarget ~= dummy.model then fightTarget, fightStart = dummy.model, os.clock() end
                         local patience = dummy.player and 8 or 4
@@ -3683,10 +3733,17 @@ do
     end
     local pressedAt, afkAt, lobbySince = 0, 0, nil
 
-    local charAddedAt = os.clock()
-    connect(player.CharacterAdded, function()
+    local charAddedAt, formChange, diedAt = -math.huge, false, -math.huge
+    local function watchDeath(character)
+        local humanoid = character and character:WaitForChild("Humanoid", 5)
+        if humanoid then connect(humanoid.Died, function() diedAt = os.clock() end) end
+    end
+    if player.Character then task.spawn(watchDeath, player.Character) end
+    connect(player.CharacterAdded, function(character)
+        formChange = os.clock() - diedAt > 15
         charAddedAt = os.clock()
         lobbySince = nil
+        task.spawn(watchDeath, character)
     end)
 
     local function hud() return player:FindFirstChildOfClass("PlayerGui") and player.PlayerGui:FindFirstChild("HUD") end
@@ -3834,7 +3891,8 @@ do
                         spawner.last = "no character called \"" .. spawner.character .. "\""
                     elseif browsing and not spawner.openedMenu then
                         spawner.last = "waiting, the character menu is open"
-                    elseif os.clock() - lobbySince > 2.5 and os.clock() - charAddedAt > 4 and os.clock() - pressedAt > 4 then
+                    elseif os.clock() - lobbySince > (formChange and 2.5 or 1)
+                        and not (formChange and os.clock() - charAddedAt < 4) and os.clock() - pressedAt > 4 then
 
                         pressedAt = os.clock()
 
@@ -5255,7 +5313,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.12.2",
+    return BPUI:CreateWindow({Version = "1.13.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
