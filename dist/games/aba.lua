@@ -899,6 +899,8 @@ do
     local watched = setmetatable({}, {__mode = "k"})
 
     local skills = setmetatable({}, {__mode = "k"})
+
+    local lastCast = setmetatable({}, {__mode = "k"})
     local MOVE_CAP = 4
     local lastHitAt, lastDodge = -math.huge, -math.huge
     local dodgeFrom
@@ -1023,11 +1025,12 @@ do
 
     local function watch(model)
         if watched[model] or model == player.Character then return end
-        local humanoid = model:FindFirstChildOfClass("Humanoid")
-        local root = model:FindFirstChild("HumanoidRootPart")
-        local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
-        if not (animator and root) then return end
+
         watched[model] = true
+        local humanoid = model:FindFirstChildOfClass("Humanoid") or model:WaitForChild("Humanoid", 10)
+        local root = model:FindFirstChild("HumanoidRootPart") or model:WaitForChild("HumanoidRootPart", 10)
+        local animator = humanoid and (humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator", 10))
+        if not (animator and root and model.Parent) then watched[model] = nil return end
         connect(animator.AnimationPlayed, function(track)
             if track.Looped then return end
             local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+$")
@@ -1042,6 +1045,7 @@ do
             if not skill then return end
             local breaks = breaksGuard(model, skill)
             skills[model] = {name = skill, at = os.clock(), root = root, breaks = breaks}
+            lastCast[model] = skills[model]
             if autoBlock.skipGuardbreaks and breaks then
                 autoBlock.last = skill .. " breaks guard, not blocking"
                 return
@@ -1064,9 +1068,68 @@ do
 
     local live = workspace:FindFirstChild("Live")
     if live then
-        for _, model in ipairs(live:GetChildren()) do pcall(watch, model) end
-        connect(live.ChildAdded, function(model) task.defer(function() pcall(watch, model) end) end)
+        for _, model in ipairs(live:GetChildren()) do task.spawn(pcall, watch, model) end
+        connect(live.ChildAdded, function(model) task.spawn(pcall, watch, model) end)
     end
+
+    autoBlock.projectiles = true
+    autoBlock.projectileBlocks = 0
+    local flying = {}
+    local function partOf(object)
+        if object:IsA("BasePart") then return object end
+        if object:IsA("Model") then return object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true) end
+    end
+    local function casterOf(pos)
+        local best, bestD
+        for model, cast in pairs(lastCast) do
+            if model.Parent and cast.root.Parent and os.clock() - cast.at < 1.5 then
+                local d = (cast.root.Position - pos).Magnitude
+                if d < 40 and (not bestD or d < bestD) then best, bestD = model, d end
+            end
+        end
+        return best
+    end
+    local thrownFolder = workspace:FindFirstChild("Thrown")
+    if thrownFolder then
+        connect(thrownFolder.ChildAdded, function(object)
+            if not autoBlock.projectiles or not guardOn() then return end
+            task.defer(function()
+                local part = partOf(object)
+                if not part or part.Size.Magnitude > 40 then return end
+                local caster = casterOf(part.Position)
+                if not caster or not isEnemy(caster) then return end
+                local cast = lastCast[caster]
+                if cast and cast.breaks then return end
+                flying[object] = {part = part, born = os.clock(), last = part.Position, lastAt = os.clock(),
+                    caster = caster, name = cast and cast.name or "a projectile"}
+            end)
+        end)
+    end
+    connect(RunService.Heartbeat, function()
+        if not next(flying) then return end
+        local mine = myRoot()
+        local now = os.clock()
+        for object, f in pairs(flying) do
+            if not object.Parent or not f.part.Parent or now - f.born > 4 then
+                flying[object] = nil
+            elseif mine and guardOn() and now >= quietUntil and now > f.lastAt then
+                local pos = f.part.Position
+                local velocity = (pos - f.last) / (now - f.lastAt)
+                f.last, f.lastAt = pos, now
+                local toMe = mine.Position - pos
+                local speed = velocity.Magnitude
+                if speed > 15 and toMe.Magnitude < 70 then
+                    local heading = velocity.Unit:Dot(toMe.Unit)
+                    local eta = toMe.Magnitude / speed
+                    if heading > 0.85 and (eta < 0.35 + timing.ping or toMe.Magnitude < 8) then
+                        if now >= holdUntil then autoBlock.projectileBlocks = autoBlock.projectileBlocks + 1 end
+                        holdUntil = math.max(holdUntil, now + 0.3)
+                        autoBlock.last = "blocking " .. f.name .. " from " .. f.caster.Name
+                    end
+                end
+            end
+        end
+    end)
 
     local function setBlock(on)
         local action = gameAction("Block")
@@ -1135,12 +1198,14 @@ do
                     local d = (s.root.Position - mine.Position).Magnitude
 
                     local aimed = d < 9 or not autoBlock.faceCheck or angleTo(s.root, mine) < 110
+
+                    local sniped = d <= 60 and angleTo(s.root, mine) < 25
                     if s.breaks and autoBlock.skipGuardbreaks then
 
-                        if autoBlock.dodgeGuardbreaks and d < 24 and aimed and now - s.at < 2 then
+                        if autoBlock.dodgeGuardbreaks and ((d < 24 and aimed) or sniped) and now - s.at < 2 then
                             dodgeFrom(s.root, mine, "dodging " .. s.name .. " (breaks guard)")
                         end
-                    elseif d <= autoBlock.range * 2 and aimed then
+                    elseif (d <= autoBlock.range * 2 and aimed) or sniped then
                         holdUntil = math.max(holdUntil, now + tail)
                         autoBlock.last = ("holding block through %s (%.1fs in)"):format(s.name, now - s.at)
                     end
@@ -1271,17 +1336,39 @@ do
         for _, c in ipairs(candidates) do
             local m = mine[c.name]
             local ok = true
+            local fit = 0
             if m and m.hit >= 3 then
                 local range = m.range / m.hit
-                if dist > range + 4 then ok = false end
+                if m.minR and m.maxR then
+
+                    ok = dist >= m.minR - 2 and dist <= m.maxR + 3
+
+                    fit = 0.3 * (1 - math.clamp(math.abs(dist - range) / 10, 0, 1))
+                elseif dist > range + 4 then
+                    ok = false
+                end
+            elseif dist > (state.Bot and state.Bot.reach or 10) then
+
+                ok = false
             end
             if ok then
                 local mean = m and m.n > 0 and (m.dmg / m.n) / 20 or 0
-                local score = ucb(mean, m and m.n or 0, total, 0.6)
+                local score = ucb(mean, m and m.n or 0, total, 0.6) + fit
                 if not bestScore or score > bestScore then best, bestScore = c, score end
             end
         end
         return best and best.index
+    end
+
+    function brain.LongestReach(names)
+        local mine = brain.data.moves[myChar()]
+        if not mine then return 0 end
+        local best = 0
+        for _, name in ipairs(names) do
+            local m = mine[name]
+            if m and m.hit >= 3 and m.maxR then best = math.max(best, m.maxR + 3) end
+        end
+        return best
     end
     function brain.Cast(name, model, dist)
         if not brain.enabled or not name then return end
@@ -1295,6 +1382,11 @@ do
                 m.hit = m.hit + 1
                 m.dmg = m.dmg + cast.dealt
                 m.range = m.range + cast.dist
+
+                m.minR = math.min(m.minR or cast.dist, cast.dist)
+                m.maxR = math.max(m.maxR or cast.dist, cast.dist)
+            else
+                m.miss = (m.miss or 0) + 1
             end
             for i, c in ipairs(casts) do if c == cast then table.remove(casts, i) break end end
             touch()
@@ -1686,6 +1778,7 @@ do
     local crowdList = {}
 
     local hitBy = {}
+    local enemyMode = setmetatable({}, {__mode = "k"})
     local function situation(dummy)
         local extra = 0
         local here = dummy.root.Position
@@ -1693,6 +1786,18 @@ do
             if other.model ~= dummy.model and (other.root.Position - here).Magnitude < 14 then extra = extra + 6 end
         end
         if autoBlock.InEndLag and autoBlock.InEndLag(dummy.model) then extra = extra - 10 end
+
+        if dummy.player then
+            local frac = Game.chargeFraction(dummy.player)
+            local st = enemyMode[dummy.player] or {}
+            enemyMode[dummy.player] = st
+            if frac >= 0.999 then st.fullAt = os.clock() end
+            local inMode = st.fullAt and os.clock() - st.fullAt < 30 and frac < 0.999 and frac > 0.02
+            local hp = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
+            if hp > 0.35 then
+                if inMode then extra = extra + 12 elseif frac >= 0.999 then extra = extra + 5 end
+            end
+        end
         if autoBlock.MidMove then
             local mid, breaks = autoBlock.MidMove(dummy.model)
             if mid and breaks then extra = extra + 8 end
@@ -1889,14 +1994,22 @@ do
 
     local lastDash = -math.huge
     local function tryDash(rootPart, targetPos)
-        if not bot.dash or os.clock() - lastDash < 2.5 then return end
         local offset = (targetPos - rootPart.Position) * Vector3.new(1, 0, 1)
         local distance = offset.Magnitude
-        if distance < 14 or distance > 40 then return end
-        if workspace:Raycast(rootPart.Position, offset, rayParams) then return end
+
+        local long = distance > 25
+        if not bot.dash or os.clock() - lastDash < (long and 0.5 or 2.5) then return end
+        if distance < 14 then return end
+
+        local reach = offset.Unit * math.min(distance, 22)
+        if workspace:Raycast(rootPart.Position, reach, rayParams) then return end
         for step = 1, 4 do
-            if not safeAt(rootPart.Position + offset * (step / 4)) then return end
+            if not safeAt(rootPart.Position + reach * (step / 4)) then return end
         end
+
+        local character = player.Character
+        if character and (character:FindFirstChild("Action") or character:FindFirstChild("NoDodge")
+            or (character:FindFirstChild("Slow") and not character:FindFirstChild("DodgeOkay"))) then return end
         lastDash = os.clock()
         bot.dashes = bot.dashes + 1
         rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + offset.Unit)
@@ -1928,6 +2041,15 @@ do
         local button = playerGui and playerGui:FindFirstChild("HUD") and playerGui.HUD:FindFirstChild("Moves")
             and playerGui.HUD.Moves:FindFirstChild(tostring(index))
         return button and button:GetAttribute("MoveName") or ("Move" .. index)
+    end
+
+    local function rangedReach()
+        if not bot.useMoves or not bot.smart then return 0 end
+        local names = {}
+        for index = 1, 4 do
+            if Game.ownMoveReady(index) then names[#names + 1] = moveNameAt(index) end
+        end
+        return #names > 0 and math.min(brain.LongestReach(names), 60) or 0
     end
 
     local function readyMove(blocking, dist)
@@ -2019,12 +2141,25 @@ do
         end
         if trade.wasBlocking then
             trade.wasBlocking = false
-            if dist <= M1_REACH and not Game.isBlocking(dummy.model) then
-                bot.trades = bot.trades + 1
-                bot.last = "hitting " .. dummy.model.Name .. " back after a block"
-                lastSwing = os.clock()
-                task.spawn(tapAction, "MouseClick")
-                return true
+
+            trade.punishUntil = os.clock() + 0.9
+            if not Game.isBlocking(dummy.model) then
+                local index = bot.useMoves and dist <= math.max(bot.reach, M1_REACH) and readyMove(false, dist)
+                if index then
+                    lastMove = os.clock()
+                    bot.punishes = (bot.punishes or 0) + 1
+                    brain.Cast(moveNameAt(index), dummy.model, dist)
+                    bot.last = "punishing " .. dummy.model.Name .. " after a block"
+                    task.spawn(tapAction, "Move" .. index)
+                    return true
+                elseif dist <= M1_REACH then
+                    bot.trades = bot.trades + 1
+                    bot.punishes = (bot.punishes or 0) + 1
+                    bot.last = "hitting " .. dummy.model.Name .. " back after a block"
+                    lastSwing = os.clock()
+                    task.spawn(tapAction, "MouseClick")
+                    return true
+                end
             end
         end
 
@@ -2109,19 +2244,28 @@ do
         watchMe()
         if defend(dummy, rootPart, dist) then return end
         local blocking = bot.smart and Game.isBlocking(dummy.model)
-        if bot.awaken and dist <= M1_REACH and Game.chargeFraction(player) >= 1 and os.clock() - lastAwaken > 3 then
-            lastAwaken = os.clock()
-            task.spawn(tapAction, "UseMode")
-            return
+
+        if blocking then
+            if trade.blockModel ~= dummy.model then trade.blockModel, trade.blockSince = dummy.model, os.clock() end
+        elseif trade.blockModel == dummy.model then
+            trade.blockModel = nil
         end
+        local guarded = blocking and trade.blockModel == dummy.model and os.clock() - trade.blockSince > 0.5
         local style = brain.Fight(dummy)
 
-        local comboReady = os.clock() - trade.landedAt < 0.8 or dist > M1_REACH
+        local fourIn = trade.landed >= 4 and os.clock() - trade.landedAt < 0.8
+        local comboReady = fourIn or dist > M1_REACH
 
-        local punish = autoBlock.InEndLag ~= nil and autoBlock.InEndLag(dummy.model)
+        local punish = (autoBlock.InEndLag ~= nil and autoBlock.InEndLag(dummy.model))
+            or os.clock() < (trade.punishUntil or 0)
 
         local finishing = bot.smart and dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1) < 0.3
-        if bot.useMoves and dist <= bot.reach and os.clock() - lastMove > 1 and (style ~= "combo" or comboReady or punish or finishing) then
+        local moveGap = (punish or fourIn) and 0.4 or 1
+
+        local inReach = dist <= M1_REACH
+        local allowed = guarded or (inReach and (fourIn or punish or finishing))
+            or (not inReach and (style ~= "combo" or comboReady or punish or finishing))
+        if bot.useMoves and dist <= math.max(bot.reach, M1_REACH, rangedReach()) and os.clock() - lastMove > moveGap and allowed then
             local index = readyMove(blocking, dist)
             if index then
                 lastMove = os.clock()
@@ -2131,13 +2275,13 @@ do
             end
         end
 
-        if style == "counter" and not punish and not finishing and os.clock() - trade.landedAt > 0.6 and os.clock() - trade.swingAt > 0.6 then
+        if style == "counter" and not punish and not finishing and not guarded and os.clock() - trade.landedAt > 0.6 and os.clock() - trade.swingAt > 0.6 then
             trade.idleSince = trade.idleSince or os.clock()
             if os.clock() - trade.idleSince < 1.5 then return end
         else
             trade.idleSince = nil
         end
-        if dist <= M1_REACH and not blocking and os.clock() - lastSwing > 0.28 then
+        if dist <= M1_REACH and (not blocking or guarded) and os.clock() - lastSwing > 0.28 then
             lastSwing = os.clock()
             task.spawn(tapAction, "MouseClick")
         end
@@ -2228,6 +2372,21 @@ do
                 task.wait(0.5)
             else
                 refreshFilter()
+
+                if bot.awaken and Game.chargeFraction(player) >= 0.999 and os.clock() - lastAwaken > 0.5 then
+                    lastAwaken = os.clock()
+                    bot.fullSince = bot.fullSince or os.clock()
+                    if os.clock() - bot.fullSince < 0.6 then
+                        task.spawn(tapAction, "UseMode")
+                    else
+
+                        local backpack = player:FindFirstChildOfClass("Backpack")
+                        local input = backpack and backpack:FindFirstChild("Input")
+                        if input and input:IsA("RemoteEvent") then pcall(function() input:FireServer("UseMode") end) end
+                    end
+                elseif Game.chargeFraction(player) < 0.999 then
+                    bot.fullSince = nil
+                end
 
                 local keep = pathTarget and pathTarget.model.Parent and pathTarget.humanoid.Health > 0
                     and (not pathTarget.player or (pathTarget.player.Parent == Players
@@ -2486,7 +2645,8 @@ do
                             end
                         end
 
-                        if level and (dist <= M1_REACH + 1 or (bot.reach > M1_REACH and dist <= bot.reach and clear)) then
+                        if level and (dist <= M1_REACH + 1 or (bot.reach > M1_REACH and dist <= bot.reach and clear)
+                            or (clear and dist <= rangedReach())) then
                             attack(dummy, rootPart, dist)
                         end
 
@@ -3796,6 +3956,44 @@ do
     local function trulyRandom() return workspace:GetAttribute("SpecialRound") == "Truly Random" end
     spawner.TrulyRandom = trulyRandom
 
+    local GOLD_DAY_CAP = 100
+    spawner.goldSkip = ""
+    local function decodeStat(name)
+        local stats = player:FindFirstChild("ReplicatedStats")
+        local value = stats and stats:FindFirstChild(name)
+        if not value then return {} end
+        local ok, data = pcall(function() return game:GetService("HttpService"):JSONDecode(value.Value) end)
+        return ok and type(data) == "table" and data or {}
+    end
+    function spawner.GoldCharacter(names)
+        local unlocked, stats = decodeStat("Unlocked"), decodeStat("CharStats")
+        local today = math.floor(os.time() / 86400)
+        local skip = {}
+        for word in tostring(spawner.goldSkip or ""):gmatch("[^,]+") do
+            skip[word:lower():gsub("^%s+", ""):gsub("%s+$", "")] = true
+        end
+        local best, bestScore, capped = nil, nil, 0
+        for _, name in ipairs(names) do
+            local have = unlocked[name] and unlocked[name].Gold
+            if not have and not name:find("Random") and not skip[name:lower()] then
+                local s = stats[name] or {}
+                if s.GoldDay == today and (s.GoldDayTime or 0) >= GOLD_DAY_CAP then
+                    capped = capped + 1
+                else
+
+                    local score = brain.CharacterScore(name) or -5
+                    if not bestScore or score > bestScore then best, bestScore = name, score end
+                end
+            end
+        end
+        if best then
+            local s = stats[best] or {}
+            return best, ("gold skin: %s (%d counted kills, %d today)"):format(best, s.GoldKills or 0,
+                s.GoldDay == today and (s.GoldDayTime or 0) or 0)
+        end
+        return nil, capped > 0 and "gold skin: every character is done for today" or "gold skin: nothing left to farm"
+    end
+
     local function pick()
         local wanted = spawner.character:lower():gsub("^%s+", ""):gsub("%s+$", "")
         local names = spawner.Characters()
@@ -3815,6 +4013,11 @@ do
                 for _, name in ipairs(names) do if name:lower() == q then return name end end
                 for _, name in ipairs(names) do if name:lower():sub(1, #q) == q then return name end end
             end
+        end
+        if spawner.gold and #names > 0 then
+            local name, why = spawner.GoldCharacter(names)
+            spawner.goldWhy = why
+            if name then return name end
         end
         if spawner.best and #names > 0 then
             local name, why = brain.BestCharacter(names)
@@ -3981,10 +4184,15 @@ do
 
     local function judge(text)
         local t = tostring(text or ""):lower()
-        if t:find("ranked") or t:find("^%s*win") or t:find(" win ") then return nil, "ranked or wins" end
+        if t:find("ranked") then return nil, "ranked" end
         local character = text:match(" as (.-)%s+in a single life") or text:match(" as (.-)%s*$")
             or text:match(" with (.-)%s*$") or text:match(" in (.-)'s mode")
         if character then character = character:gsub("^%s+", ""):gsub("%s+$", "") end
+
+        if t:find("^%s*win") or t:find(" win ") then
+            local wins = tonumber(t:match("win (%d+)")) or 1
+            return wins * 20, nil, character
+        end
         local kills = t:match("get (%d+) kills")
         if kills then
             local effort = tonumber(kills) * (t:find("'s mode") and 3 or 1)
@@ -5313,7 +5521,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.13.0",
+    return BPUI:CreateWindow({Version = "1.14.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -5408,7 +5616,7 @@ do
         Description = "How far out it casts moves. Past 10, ranged moves go off on the way in. M1s always wait until it's in reach.",
         Callback = function(value) bot.reach = math.clamp(tonumber(value) or 10, 3, 60) end})
     farmControls.awaken = fight:AddToggle({Name = "Use awakening", Default = true, Flag = "bot_awaken",
-        Description = "Presses G when the mode bar is full and it's next to someone.",
+        Description = "Presses G the moment the mode bar is full.",
         Callback = function(value) bot.awaken = value == true end})
     farmControls.trade = fight:AddToggle({Name = "M1 trading", Default = true, Flag = "bot_trade",
         Description = "Hits back the moment a block drops, blocks swings itself when Auto Block isn't on, dodges out after two hits in a row or a finisher, and dashes after its own finisher.",
@@ -5463,6 +5671,12 @@ do
     presetToggles.best = spawn:AddToggle({Name = "Play my best character", Tag = "Experimental", Default = false, Flag = "spawn_best",
         Description = "Gives each of your characters a 20-fight trial (the 8 whose moves hit hardest first), scores what the farm does with each, then sticks to the best. Overrides the name above; daily quests still come first.",
         Callback = function(value) spawner.best = value == true end})
+    spawn:AddToggle({Name = "Farm gold skins", Tag = "Experimental", Default = false, Flag = "spawn_gold",
+        Description = "Plays a character whose Gold skin you don't have yet (the one the farm does best with first) and moves to the next when its daily count tops out. Kills on fresh people count, repeat kills of one person don't. Not every character has a Gold skin, so skip the ones that don't below. Daily quests still come first.",
+        Callback = function(value) spawner.gold = value == true end})
+    spawn:AddInput({Name = "Skip for gold skins", Placeholder = "names, comma separated", Flag = "spawn_gold_skip",
+        Description = "Characters the gold skin farm leaves alone, e.g. ones with no Gold skin or ones you don't like playing.",
+        Callback = function(text) spawner.goldSkip = tostring(text or "") end})
     presetToggles.noAfk = spawn:AddToggle({Name = "Stay off the AFK team", Default = false, Flag = "spawn_no_afk",
         Description = "If the game marks you AFK, presses the afk button again to come back.",
         Callback = function(value) spawner.noAfk = value == true end})
@@ -5470,7 +5684,7 @@ do
 
     local questSection = farmTab:CreateSection("Daily quests")
     presetToggles.quests = questSection:AddToggle({Name = "Do daily quests", Default = false, Flag = "spawn_quests",
-        Description = "Takes the quests the farm can finish by itself (kills, damage, short combos), best gold first, and respawns you as the character they need. Ranked, wins and anything else are skipped. Needs Auto spawn on to change character.",
+        Description = "Takes the quests the farm can finish by itself (kills, damage, short combos, public match wins), best gold first, and respawns you as the character they need. Ranked and anything else are skipped. Needs Auto spawn on to change character.",
         Callback = function(value) spawner.quests = value == true quests.enabled = value == true end})
     ui.questStatus = questSection:AddLabel({Text = "off", Style = "Sub"})
     presetToggles.feed = questSection:AddToggle({Name = "Feed kill quests with my other account", Tag = "Experimental", Default = false, Flag = "quest_feed",
@@ -5609,6 +5823,9 @@ do
     tuning:AddToggle({Name = "Dodge guard breaks and finishers", Default = true, Flag = "auto_block_dodge_gb",
         Description = "Dashes sideways out of moves that go through block, and out of the farm's 5th M1 hit.",
         Callback = function(value) autoBlock.dodgeGuardbreaks = value == true end})
+    tuning:AddToggle({Name = "Block projectiles", Default = true, Flag = "auto_block_projectiles",
+        Description = "Blocks projectiles flying at you just before they land. Only ones from blockable moves: guard-break projectiles are left to the dodge.",
+        Callback = function(value) autoBlock.projectiles = value == true end})
     tuning:AddLabel({Text = "the 5th hit of an M1 chain knocks block off for a few seconds; nothing gets around that", Style = "Sub"})
 end
 
@@ -6263,7 +6480,8 @@ task.spawn(function()
             lines.krillin:Set("Krillin: kiblast " .. onOff(krillin.enabled))
 
             ui.botStatus:Set(bot.enabled and (bot.last .. "  ·  target: " .. bot.target) or "off")
-            ui.spawnStatus:Set(spawner.last .. ((spawner.best and spawner.bestWhy) and ("  ·  " .. spawner.bestWhy) or ""))
+            ui.spawnStatus:Set(spawner.last .. ((spawner.gold and spawner.goldWhy) and ("  ·  " .. spawner.goldWhy)
+                or (spawner.best and spawner.bestWhy) and ("  ·  " .. spawner.bestWhy) or ""))
             if ui.charRanking then ui.charRanking:Set(brain.CharacterTable(8)) end
             ui.macro:Set(macro.last .. ((#macro.events > 0 and not macro.recording) and ("  ·  " .. macro.Summary()) or ""))
             ui.espStatus:Set(esp.enabled and (esp.shown .. " players shown") or "off")
