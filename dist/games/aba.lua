@@ -1328,8 +1328,20 @@ do
     local plainFight = false
     local function learning() return brain.enabled and not plainFight and trusted() end
     function brain.PickMove(candidates, dist)
-        if not learning() or #candidates == 0 then return candidates[1] and candidates[1].index end
+        if #candidates == 0 then return nil end
         local mine = brain.data.moves[myChar()] or {}
+        if not learning() then
+
+            for _, c in ipairs(candidates) do
+                local m = mine[c.name]
+                if m and m.hit >= 3 and m.minR and m.maxR then
+                    if dist >= m.minR - 2 and dist <= m.maxR + 3 then return c.index end
+                elseif dist <= (state.Bot and state.Bot.reach or 10) or (brain.Unexplored(c.name) and dist >= 14 and dist <= 26) then
+                    return c.index
+                end
+            end
+            return nil
+        end
         local total = 0
         for _, c in ipairs(candidates) do total = total + ((mine[c.name] and mine[c.name].n) or 0) end
         local best, bestScore
@@ -1349,7 +1361,10 @@ do
                 end
             elseif dist > (state.Bot and state.Bot.reach or 10) then
 
-                ok = false
+                ok = brain.Unexplored(c.name) and dist >= 14 and dist <= 26
+            end
+            if m and m.hit >= 3 and ok == false and brain.Unexplored(c.name) and dist >= 14 and dist <= 26 then
+                ok = true
             end
             if ok then
                 local mean = m and m.n > 0 and (m.dmg / m.n) / 20 or 0
@@ -1358,6 +1373,33 @@ do
             end
         end
         return best and best.index
+    end
+
+    function brain.Unexplored(name)
+        local mine = brain.data.moves[myChar()]
+        local m = mine and mine[name]
+        if not m then return true end
+        if (m.maxR or 0) >= 14 then return false end
+        return (m.longTry or 0) < 6
+    end
+
+    function brain.KiteDistance()
+        local mine = brain.data.moves[myChar()]
+        if not mine then return nil end
+        local sum, n = 0, 0
+        for _, m in pairs(mine) do
+            if m.hit >= 3 and (m.maxR or 0) >= 15 then
+                sum = sum + math.clamp(m.range / m.hit, 12, 30)
+                n = n + 1
+            end
+        end
+        return n > 0 and sum / n or nil
+    end
+
+    function brain.LandsFrom(name, dist)
+        local mine = brain.data.moves[myChar()]
+        local m = mine and mine[name]
+        return m ~= nil and m.hit >= 3 and m.minR ~= nil and dist >= m.minR - 2 and dist <= m.maxR + 3
     end
 
     function brain.LongestReach(names)
@@ -1370,14 +1412,16 @@ do
         end
         return best
     end
+
     function brain.Cast(name, model, dist)
-        if not brain.enabled or not name then return end
+        if not name then return end
         local cast = {name = name, char = myChar(), at = os.clock(), model = model, dist = dist, dealt = 0}
         casts[#casts + 1] = cast
         task.delay(1.6, function()
             local mine = entry(brain.data.moves, cast.char, function() return {} end)
             local m = entry(mine, cast.name, function() return {n = 0, hit = 0, dmg = 0, range = 0} end)
             m.n = m.n + 1
+            if cast.dist and cast.dist >= 14 then m.longTry = (m.longTry or 0) + 1 end
             if cast.dealt > 0 then
                 m.hit = m.hit + 1
                 m.dmg = m.dmg + cast.dealt
@@ -1502,7 +1546,8 @@ do
     end
 
     function brain.Fight(target)
-        if not brain.enabled then return "rush" end
+
+        if not brain.enabled then watchModel(target.model, target.humanoid) return "rush" end
         watchMine()
         if fight and fight.model ~= target.model then
 
@@ -1656,7 +1701,7 @@ end
 local bot = {enabled = false, sprint = true, dash = true, useMoves = true, reach = 10, last = "off", target = "none",
     dashes = 0, jumps = 0, targets = "Players", teamMode = "enemies", skipAfk = true, stick = true,
     lockCamera = true, aimMouse = false, targetPlayer = nil, awaken = true, smart = true, targetMode = "nearest", skipUlt = true,
-    trade = true, jumpOver = true, trades = 0, escapes = 0, learn = true}
+    trade = true, jumpOver = true, trades = 0, escapes = 0, learn = true, kite = true}
 state.Bot = bot
 do
     local PathfindingService = game:GetService("PathfindingService")
@@ -2045,11 +2090,23 @@ do
 
     local function rangedReach()
         if not bot.useMoves or not bot.smart then return 0 end
-        local names = {}
+        local names, explore = {}, false
         for index = 1, 4 do
-            if Game.ownMoveReady(index) then names[#names + 1] = moveNameAt(index) end
+            if Game.ownMoveReady(index) then
+                local name = moveNameAt(index)
+                names[#names + 1] = name
+                if brain.Unexplored(name) then explore = true end
+            end
         end
-        return #names > 0 and math.min(brain.LongestReach(names), 60) or 0
+        if #names == 0 then return 0 end
+        return math.max(math.min(brain.LongestReach(names), 60), explore and 26 or 0)
+    end
+
+    local function rangedReadyAt(dist)
+        for index = 1, 4 do
+            if Game.ownMoveReady(index) and brain.LandsFrom(moveNameAt(index), dist) then return true end
+        end
+        return false
     end
 
     local function readyMove(blocking, dist)
@@ -2327,6 +2384,21 @@ do
         local stuckFrom, stuckAt, jumps = nil, os.clock(), 0
         local fightTarget, fightStart = nil, 0
         local chaseTarget, chaseStart, chaseDist0 = nil, 0, nil
+        local kiteSide, kiteFlipAt, kiteIdleSince = 1, 0, nil
+
+        local goInUntil = 0
+        local function goingIn(dummy)
+            if os.clock() < goInUntil then return true end
+            local hp = dummy.humanoid.Health / math.max(dummy.humanoid.MaxHealth, 1)
+            if hp < 0.3 or os.clock() < (trade.punishUntil or 0)
+                or (autoBlock.InEndLag and autoBlock.InEndLag(dummy.model)) then return true end
+            if kiteIdleSince and os.clock() - kiteIdleSince > 4 then
+                kiteIdleSince = nil
+                goInUntil = os.clock() + 4
+                return true
+            end
+            return false
+        end
         local failStreak = 0
         local jumpedAt = nil
         local skipAt = 0
@@ -2483,6 +2555,7 @@ do
                     local gap = (dummy.root.Position - rootPart.Position) * Vector3.new(1, 0, 1)
                     local dist = gap.Magnitude
                     local level = math.abs(dummy.root.Position.Y - rootPart.Position.Y) < 8
+                    local kiteFrom = bot.kite and bot.smart and bot.useMoves and brain.KiteDistance() or nil
                     watch(dummy)
                     if chaseTarget ~= dummy.model then chaseTarget, chaseStart, chaseDist0 = dummy.model, os.clock(), dist end
                     local above = dummy.root.Position.Y - rootPart.Position.Y
@@ -2508,6 +2581,40 @@ do
                         moveDir = to.Magnitude > 1.5 and to.Unit or Vector3.zero
                         bot.last = ("jumping at %s (%d studs up)"):format(dummy.model.Name, above)
                         if rootPart.Position.Y + 4 > dummy.root.Position.Y - 4 then attack(dummy, rootPart, dist) end
+                    elseif kiteFrom and level and dist > M1_REACH and dist < kiteFrom + 8
+                        and not goingIn(dummy) then
+
+                        path = nil
+                        chaseStart, chaseDist0 = os.clock(), dist
+                        local away = gap.Magnitude > 0.1 and -gap.Unit or rootPart.CFrame.LookVector
+                        local crowd = Vector3.zero
+                        for _, other in ipairs(crowdList) do
+                            if other.model ~= dummy.model then
+                                local off = (rootPart.Position - other.root.Position) * Vector3.new(1, 0, 1)
+                                if off.Magnitude < 16 and off.Magnitude > 0.1 then crowd = crowd + off.Unit * (16 - off.Magnitude) / 16 end
+                            end
+                        end
+                        if os.clock() - kiteFlipAt > 1.6 then kiteSide, kiteFlipAt = -kiteSide, os.clock() end
+                        local strafe = away:Cross(Vector3.yAxis) * kiteSide
+                        local dir
+                        if dist < kiteFrom - 3 then
+                            dir = away + crowd * 0.7
+                        elseif dist > kiteFrom + 3 then
+                            dir = -away + crowd * 0.4
+                        else
+                            dir = strafe + crowd * 0.5
+                        end
+                        dir = dir.Magnitude > 0.05 and dir.Unit or strafe
+                        if not safeAt(rootPart.Position + dir * 3) then
+                            kiteSide = -kiteSide
+                            dir = (away:Cross(Vector3.yAxis) * kiteSide)
+                            if not safeAt(rootPart.Position + dir * 3) then dir = Vector3.zero end
+                        end
+                        moveDir = dir
+                        sprintFor(dist < kiteFrom - 3 and 30 or 0)
+                        bot.last = ("keeping range on %s (%d studs, aiming for %d)"):format(dummy.model.Name, dist, kiteFrom)
+                        if rangedReadyAt(dist) then kiteIdleSince = nil else kiteIdleSince = kiteIdleSince or os.clock() end
+                        attack(dummy, rootPart, dist)
                     elseif dist <= M1_REACH and level then
 
                         path = nil
@@ -2528,7 +2635,14 @@ do
                             local ahead = dummy.root.Position + dummy.root.AssemblyLinearVelocity * Vector3.new(1, 0, 1) * 0.15
                             local to = (ahead - rootPart.Position) * Vector3.new(1, 0, 1)
                             local dir = to.Magnitude > 0.1 and to.Unit or Vector3.zero
-                            if to.Magnitude > 3.5 and safeAt(rootPart.Position + dir * 3) then moveDir = dir else moveDir = Vector3.zero end
+
+                            local backOff = kiteFrom and not goingIn(dummy) and os.clock() - trade.landedAt > 0.8
+                                and rangedReadyAt(kiteFrom)
+                            if backOff and safeAt(rootPart.Position - dir * 3) then
+                                moveDir = -dir
+                                setSprint(true)
+                                bot.last = "backing off " .. dummy.model.Name .. " to cast from range"
+                            elseif to.Magnitude > 3.5 and safeAt(rootPart.Position + dir * 3) then moveDir = dir else moveDir = Vector3.zero end
                             attack(dummy, rootPart, dist)
                         end
                     else
@@ -5521,7 +5635,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.14.0",
+    return BPUI:CreateWindow({Version = "1.15.0",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -5618,6 +5732,9 @@ do
     farmControls.awaken = fight:AddToggle({Name = "Use awakening", Default = true, Flag = "bot_awaken",
         Description = "Presses G the moment the mode bar is full.",
         Callback = function(value) bot.awaken = value == true end})
+    farmControls.kite = fight:AddToggle({Name = "Fight from range", Tag = "Experimental", Default = true, Flag = "bot_kite",
+        Description = "With a character whose moves land from range, keeps that distance instead of brawling: backs off, strafes and casts from there, and goes in to finish, punish or when nothing ranged is ready. It tries each move from 14-26 studs a few times first to learn which ones reach.",
+        Callback = function(value) bot.kite = value == true end})
     farmControls.trade = fight:AddToggle({Name = "M1 trading", Default = true, Flag = "bot_trade",
         Description = "Hits back the moment a block drops, blocks swings itself when Auto Block isn't on, dodges out after two hits in a row or a finisher, and dashes after its own finisher.",
         Callback = function(value) bot.trade = value == true end})
