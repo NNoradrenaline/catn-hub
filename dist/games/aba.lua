@@ -1199,7 +1199,7 @@ do
 
                     local aimed = d < 9 or not autoBlock.faceCheck or angleTo(s.root, mine) < 110
 
-                    local sniped = d <= 60 and angleTo(s.root, mine) < 25
+                    local sniped = d > autoBlock.range * 2 and d <= 60 and now - s.at < 1.5 and angleTo(s.root, mine) < 25
                     if s.breaks and autoBlock.skipGuardbreaks then
 
                         if autoBlock.dodgeGuardbreaks and ((d < 24 and aimed) or sniped) and now - s.at < 2 then
@@ -1942,6 +1942,11 @@ do
 
         local _, humanoid = Game.ownRoot()
         if on and humanoid and humanoid.WalkSpeed < 12 then return end
+
+        if on and humanoid and humanoid.MoveDirection.Magnitude > 0.5 and humanoid.WalkSpeed <= 19
+            and os.clock() - lastRunPress > 1.5 then
+            runOn, runHeld = false, false
+        end
         if gameSetting("SprintMode") == "Toggle" then
             if runOn ~= on and os.clock() - lastRunPress > 1 then
                 lastRunPress = os.clock()
@@ -1952,6 +1957,7 @@ do
             end
         elseif on ~= runHeld then
             runHeld = on
+            lastRunPress = os.clock()
             pcall(function() action:Fire(on) end)
         end
     end
@@ -2385,6 +2391,7 @@ do
         local fightTarget, fightStart = nil, 0
         local chaseTarget, chaseStart, chaseDist0 = nil, 0, nil
         local kiteSide, kiteFlipAt, kiteIdleSince = 1, 0, nil
+        local deadSince, lastMenuReturn = nil, -math.huge
 
         local goInUntil = 0
         local function goingIn(dummy)
@@ -2406,6 +2413,7 @@ do
         while bot.enabled and alive do
             bot.beat = os.clock()
             local rootPart, humanoid = Game.ownRoot()
+            if rootPart then deadSince = nil end
 
             if humanoid and moveDir.Magnitude > 0 and humanoid.MoveDirection.Magnitude < 0.01 and humanoid.WalkSpeed > 0 then
                 stillSince = stillSince or os.clock()
@@ -2420,6 +2428,20 @@ do
             if not rootPart then
                 moveDir = Vector3.zero
                 bot.last = "waiting to respawn"
+
+                deadSince = deadSince or os.clock()
+                if os.clock() - deadSince > 20 and state.Spawner and state.Spawner.enabled
+                    and os.clock() - lastMenuReturn > 15 then
+                    lastMenuReturn = os.clock()
+                    bot.menuReturns = (bot.menuReturns or 0) + 1
+                    bot.last = "not respawning, going back through the menu"
+                    pcall(function()
+                        local button = player.PlayerGui.HUD.LeftBotCorner:FindFirstChild("ReturnToMenu")
+                        if button and type(getconnections) == "function" then
+                            for _, c in ipairs(getconnections(button.Activated)) do pcall(function() c:Fire() end) end
+                        end
+                    end)
+                end
                 task.wait(0.5)
             elseif state.Spawner and (state.Spawner.InLobby() or (lobbyPos and os.clock() - lobbyAt < 5
                 and (rootPart.Position - lobbyPos).Magnitude < 300)) then
@@ -2434,7 +2456,9 @@ do
                 task.wait(0.2)
             elseif state.Obby and state.Obby.active then
                 moveDir = Vector3.zero
-                setSprint(false)
+
+                bot.target, bot.targetPlayer, lockRoot = "none", nil, nil
+                pathTarget, path = nil, nil
                 bot.last = "a minigame is on, Play minigames is playing it"
                 task.wait(0.3)
             elseif bot.targets == "Dummies" and not solo() then
@@ -4481,6 +4505,8 @@ do
     arcParams.FilterType = Enum.RaycastFilterType.Include
     arcParams.RespectCanCollide = true
     local linkCache = setmetatable({}, {__mode = "k"})
+
+    local failedJumps = setmetatable({}, {__mode = "k"})
     local function key(ix, iz) return ix * 100000 + iz end
 
     local function build(map)
@@ -4526,6 +4552,7 @@ do
         movers.set = moverSet
         arcParams.FilterDescendantsInstances = {map}
         table.clear(linkCache)
+        table.clear(failedJumps)
         local function roomAt(x, y, z, under)
             local hits = workspace:GetPartBoundsInBox(CFrame.new(x, y + 3.1, z), Vector3.new(2.6, 5, 2.6), overlap)
             for _, hit in ipairs(hits) do
@@ -4717,8 +4744,10 @@ do
                             if kind == "double" and not arcClear(cell, n, true) then kind = nil end
 
                             if kind == "jump" and arcClear(cell, n, true) then kind = "double" end
+                            if kind and failedJumps[cell] and (failedJumps[cell][n] or 0) >= 2 then kind = nil end
                             if kind then
-                                out[#out + 1] = {to = n, kind = kind, cost = dist + 3 + (n.danger or 0) * 30}
+                                out[#out + 1] = {to = n, kind = kind, cost = dist + 3 + (n.danger or 0) * 30
+                                    + (failedJumps[cell] and (failedJumps[cell][n] or 0) * 15 or 0)}
 
                                 if dy > -1.6 then landed = true end
                             end
@@ -4859,15 +4888,36 @@ do
         return humanoid ~= nil and humanoid.FloorMaterial ~= Enum.Material.Air and math.abs(root.AssemblyLinearVelocity.Y) < 6
     end
 
+    local OBBY_CAMERA = RENDER .. "Cam"
     local function bind()
         pcall(function() RunService:UnbindFromRenderStep(RENDER) end)
+        pcall(function() RunService:UnbindFromRenderStep(OBBY_CAMERA) end)
         RunService:BindToRenderStep(RENDER, Enum.RenderPriority.Character.Value + 2, function()
             if not obby.active then return end
             local _, humanoid = Game.ownRoot()
             if humanoid then humanoid:Move(moveDir, false) end
         end)
+        RunService:BindToRenderStep(OBBY_CAMERA, Enum.RenderPriority.Camera.Value + 2, function()
+            if not obby.active or moveDir.Magnitude < 0.1 then return end
+            local root = Game.ownRoot()
+            local camera = workspace.CurrentCamera
+            if not root or not camera then return end
+            local current = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+            local want = moveDir * Vector3.new(1, 0, 1)
+            if want.Magnitude < 0.1 then return end
+            want = want.Unit
+            local look = current.Magnitude > 0.1 and current.Unit:Lerp(want, 0.25) or want
+            if look.Magnitude < 0.1 then look = want end
+            look = look.Unit
+            local distance = math.clamp((camera.CFrame.Position - root.Position).Magnitude, 8, 18)
+            local eye = root.Position - look * distance + Vector3.new(0, distance * 0.35, 0)
+            camera.CFrame = CFrame.lookAt(eye, root.Position + look * 4 + Vector3.new(0, 1.5, 0))
+        end)
     end
-    onCleanup(function() pcall(function() RunService:UnbindFromRenderStep(RENDER) end) end)
+    onCleanup(function()
+        pcall(function() RunService:UnbindFromRenderStep(RENDER) end)
+        pcall(function() RunService:UnbindFromRenderStep(OBBY_CAMERA) end)
+    end)
 
     local function flat(v) return Vector3.new(v.X, 0, v.Z) end
 
@@ -4892,6 +4942,7 @@ do
         local legStart = os.clock()
         local lastPos = nil
         local stuckPos, stuckAt, stuckJumped = nil, os.clock(), false
+        local hazardSince = nil
         while i <= #path do
             if not obby.enabled or not alive or not map.Parent then return "stop" end
             local root = Game.ownRoot()
@@ -4918,6 +4969,13 @@ do
                 local risky = false
                 for _, ahead in ipairs({3, 5, 7}) do
                     if dangerAt(root.Position + dir * ahead, link.to.y, 0.35 + ahead * 0.08) then risky = true break end
+                end
+
+                if risky then
+                    hazardSince = hazardSince or os.clock()
+                    if os.clock() - hazardSince > 5 then risky = false obby.last = "going through the hazard" end
+                else
+                    hazardSince = nil
                 end
                 if risky then
                     obby.waits = obby.waits + 1
@@ -4982,6 +5040,13 @@ do
                     lastPos = root and root.Position
                     local here = root and cellNear(root.Position)
                     if not here or here ~= link.to and flat(Vector3.new(here.x, 0, here.z) - target).Magnitude > 3 then
+
+                        if from then
+                            failedJumps[from] = failedJumps[from] or {}
+                            failedJumps[from][link.to] = (failedJumps[from][link.to] or 0) + 1
+                            linkCache[from] = nil
+                            obby.missedJumps = (obby.missedJumps or 0) + 1
+                        end
                         return "replan"
                     end
                     i = i + 1
@@ -5028,6 +5093,11 @@ do
                 if not root or not grounded(root) then
                     moveDir = Vector3.zero
                     task.wait(0.2)
+                elseif not cellNear(root.Position) then
+
+                    moveDir = Vector3.zero
+                    obby.last = "waiting to be put on the course"
+                    task.wait(0.3)
                 else
                     local start = cellNear(root.Position)
                     local path = start and plan(start)
@@ -5196,8 +5266,10 @@ do
             local mode = server:GetAttribute("Mode")
             local players = tonumber(server:GetAttribute("PlayerCount")) or 0
             local max = tonumber(server:GetAttribute("MaxPlayers")) or 0
+            local map = server:GetAttribute("Map")
+            local cityThere = hop.skipCity and type(map) == "string" and map:lower():find("city") ~= nil
             if server.Name ~= here and server:GetAttribute("Type") == "Public" and type(mode) == "string"
-                and mode ~= "Intermission" and not hop.skip[mode] and players >= 3 and players <= max - 2
+                and mode ~= "Intermission" and not hop.skip[mode] and not cityThere and players >= 3 and players <= max - 2
                 and (not hop.wantBigger or players >= hop.minPlayers) then
                 list[#list + 1] = {id = server.Name, mode = mode, players = players, max = max,
                     name = server:GetAttribute("ServerName") or "?"}
@@ -5232,6 +5304,11 @@ do
         while alive do
             local mode = currentMode()
             local bad = hop.skipJuggernaut and correctGame and mode ~= nil and hop.skip[mode] == true
+
+            local mapName = workspace:GetAttribute("MapName")
+            if not bad and hop.skipCity and correctGame and type(mapName) == "string" and mapName:lower():find("city") then
+                bad, mode = true, mapName
+            end
             local idle = bot.enabled and bot.target == "none" and Game.ownRoot() ~= nil and not spawner.InLobby()
 
             local count = #Players:GetPlayers()
@@ -5635,7 +5712,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.15.0",
+    return BPUI:CreateWindow({Version = "1.15.1",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
@@ -5859,6 +5936,9 @@ do
     presetToggles.skipJuggernaut = night:AddToggle({Name = "Skip Juggernaut servers", Default = false, Flag = "hop_skip_juggernaut",
         Description = "Leaves a server as soon as it's playing Juggernaut, for one that has people in and isn't. Hops always pick a non-Juggernaut server.",
         Callback = function(value) hop.skipJuggernaut = value == true end})
+    presetToggles.skipCity = night:AddToggle({Name = "Skip the city map", Default = true, Flag = "hop_skip_city",
+        Description = "Leaves a server playing the huge city map (everyone is spread out, so the farm mostly runs) and never hops into one that's on it.",
+        Callback = function(value) hop.skipCity = value == true end})
     presetToggles.lowPop = night:AddToggle({Name = "Hop when the server is small", Default = false, Flag = "hop_low_pop",
         Description = "Joins a bigger server from the game's list when this one has fewer players than the number below for 30 seconds. More people to fight means more kills.",
         Callback = function(value) hop.lowPop = value == true end})
