@@ -28,7 +28,6 @@ if type(identifyexecutor) == "function" then
 end
 local click = type(mouse1click) == "function" and mouse1click or nil
 local holdClick = type(mouse1press) == "function" and type(mouse1release) == "function"
-local canKeyClick = type(keyclick) == "function"
 local canAimMouse = type(mousemoveabs) == "function"
 local canCheckOwner = type(isnetworkowner) == "function"
 local focusCheck
@@ -1766,7 +1765,12 @@ do
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
     rayParams.RespectCanCollide = true
+
+    local filterFor = nil
     local function refreshFilter()
+        if filterFor == player.Character and filterFor ~= nil then return end
+
+        filterFor = workspace:FindFirstChild("Live") and thrown() and player.Character or nil
         local ignore = {}
         if player.Character then ignore[#ignore + 1] = player.Character end
         if workspace:FindFirstChild("Live") then ignore[#ignore + 1] = workspace.Live end
@@ -2904,21 +2908,9 @@ do
 end
 
 local COLORS = {
-    barBack = Color3.fromRGB(20, 20, 24),
-    ready = Color3.fromRGB(110, 220, 120), charging = Color3.fromRGB(240, 170, 60),
-    mode = Color3.fromRGB(150, 110, 240), modeReady = Color3.fromRGB(255, 215, 70),
-    hpLow = Color3.fromRGB(235, 70, 70), hpHigh = Color3.fromRGB(110, 220, 120),
+    barBack = Color3.fromRGB(20, 20, 24), charging = Color3.fromRGB(240, 170, 60),
     text = Color3.fromRGB(230, 230, 230), dim = Color3.fromRGB(160, 160, 160),
 }
-
-local function makeBar(parent, height, order)
-    local back = make("Frame", {BackgroundColor3 = COLORS.barBack, BackgroundTransparency = 0.25,
-        BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, height), LayoutOrder = order or 0}, parent)
-    make("UICorner", {CornerRadius = UDim.new(0, 2)}, back)
-    local fill = make("Frame", {BorderSizePixel = 0, Size = UDim2.fromScale(1, 1)}, back)
-    make("UICorner", {CornerRadius = UDim.new(0, 2)}, fill)
-    return back, fill
-end
 
 local function makeText(parent, props)
     props.BackgroundTransparency = 1
@@ -2927,37 +2919,6 @@ local function makeText(parent, props)
     props.TextColor3 = props.TextColor3 or COLORS.text
     return make("TextLabel", props, parent)
 end
-
-local function makeMoveRows(parent, count, firstOrder, nameWidth, textSize)
-    local rows = {}
-    for index = 1, count do
-        local row = make("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, textSize + 1),
-            LayoutOrder = firstOrder + index, Visible = false}, parent)
-        local label = makeText(row, {Size = UDim2.new(nameWidth, -4, 1, 0), TextSize = textSize,
-            TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd})
-        local back, fill = makeBar(row, 5)
-        back.AnchorPoint = Vector2.new(1, 0.5)
-        back.Position = UDim2.fromScale(1, 0.5)
-        back.Size = UDim2.new(1 - nameWidth, 0, 0, 5)
-        rows[index] = {row = row, label = label, fill = fill}
-    end
-    return rows
-end
-
-local function paintMoves(rows, moves)
-    for index, row in ipairs(rows) do
-        local move = moves[index]
-        row.row.Visible = move ~= nil
-        if move then
-            row.label.Text = move.name
-            row.label.TextColor3 = move.ready and COLORS.text or COLORS.dim
-            row.fill.Size = UDim2.fromScale(move.progress, 1)
-            row.fill.BackgroundColor3 = move.ready and COLORS.ready or COLORS.charging
-        end
-    end
-end
-
-local function healthColor(fraction) return COLORS.hpLow:Lerp(COLORS.hpHigh, fraction) end
 
 local STYLE = {
     card = Color3.fromRGB(14, 15, 19), line = Color3.fromRGB(255, 255, 255),
@@ -3203,7 +3164,7 @@ do
         BackgroundColor3 = STYLE.card, BackgroundTransparency = 0, BorderSizePixel = 0,
         Visible = false, AutomaticSize = Enum.AutomaticSize.Y}, gui)
     make("UICorner", {CornerRadius = UDim.new(0, 10)}, frame)
-    local frameStroke = make("UIStroke", {Color = STYLE.line, Transparency = 0.9, Thickness = 1}, frame)
+    make("UIStroke", {Color = STYLE.line, Transparency = 0.9, Thickness = 1}, frame)
     make("UIPadding", {PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12),
         PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)}, frame)
     make("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8)}, frame)
@@ -5171,6 +5132,11 @@ do
             end
             obby.fell = false
             local wasMixed = false
+
+            local tiles = {}
+            for _, tile in ipairs(map:GetDescendants()) do
+                if tile:IsA("BasePart") and tile.Name == "Tile" then tiles[#tiles + 1] = tile end
+            end
             while obby.enabled and alive and map.Parent and indicator and indicator.Parent and os.clock() - started < 240 do
                 local root = Game.ownRoot()
                 if root and floorY and root.Position.Y < floorY - 4 then obby.fell = true end
@@ -5186,8 +5152,8 @@ do
                     local best, bestD
 
                     local sum, count, first, mixed = Vector3.zero, 0, nil, false
-                    for _, tile in ipairs(map:GetDescendants()) do
-                        if tile:IsA("BasePart") and tile.Name == "Tile" then
+                    for _, tile in ipairs(tiles) do
+                        if tile.Parent then
                             sum, count = sum + tile.Position, count + 1
                             if not first then first = tile.Color elseif colorGap(first, tile.Color) > 0.08 then mixed = true end
                             if tile.CanCollide and tile.Transparency < 0.9 and colorGap(tile.Color, want) < 0.08 then
@@ -5712,7 +5678,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.15.1",
+    return BPUI:CreateWindow({Version = "1.15.2",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
