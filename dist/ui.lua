@@ -1,4 +1,4 @@
--- catn hub v1.14.0
+-- catn hub v1.14.1
 local Vanta = (function(...)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -5982,7 +5982,7 @@ function BPUI:CreateWindow(o)
     o = o or {}
     local gone
 
-    local version = o.Version or "1.14.0"
+    local version = o.Version or "1.14.1"
     local v = Vanta:Window({
         Title = o.Title,
 

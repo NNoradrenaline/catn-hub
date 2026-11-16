@@ -1939,10 +1939,27 @@ do
 
         connect(player.CharacterAdded, function() runOn, runHeld = false, false end)
     end
+
+    local stickSet = false
+    local function mobileSprint(on)
+        pcall(function()
+            local controls = require(player.PlayerScripts:WaitForChild("PlayerModule", 1)):GetControls()
+            local stick = controls and controls:GetActiveController()
+            if not stick or stick.moveTouchObject ~= nil then return end
+            if on then
+                stick.moveVector = Vector3.new(0, 0, -1.3)
+                stickSet = true
+            elseif stickSet then
+                stick.moveVector = Vector3.zero
+                stickSet = false
+            end
+        end)
+    end
     local function setSprint(on)
         sprinting = on
+        if gameSetting("Platform") == "Mobile" then return mobileSprint(on) end
         local action = gameAction("Run")
-        if not action or gameSetting("Platform") == "Mobile" then return end
+        if not action then return end
 
         local _, humanoid = Game.ownRoot()
         if on and humanoid and humanoid.WalkSpeed < 12 then return end
@@ -2086,6 +2103,27 @@ do
         return false
     end
 
+    local function castMove(index)
+        tapAction("Move" .. index)
+        local t = os.clock()
+        while os.clock() - t < 0.5 do
+            local character = player.Character
+            if character and character:HasTag("MoveInputting") then
+                local playerGui = player:FindFirstChildOfClass("PlayerGui")
+                local box = playerGui and playerGui:FindFirstChild("GuiBox")
+                local options = box and box:FindFirstChild("Moves")
+                local count = 0
+                for _, child in ipairs(options and options:GetChildren() or {}) do
+                    if child.Name:match("^%d+Clone$") then count = count + 1 end
+                end
+                task.wait(0.1)
+                tapAction("Move" .. math.random(math.max(count, 1)))
+                return
+            end
+            task.wait()
+        end
+    end
+
     local function face(dummy, rootPart)
         local look = Vector3.new(dummy.root.Position.X, rootPart.Position.Y, dummy.root.Position.Z)
         if (look - rootPart.Position).Magnitude > 0.5 then rootPart.CFrame = CFrame.lookAt(rootPart.Position, look) end
@@ -2217,7 +2255,7 @@ do
                     bot.punishes = (bot.punishes or 0) + 1
                     brain.Cast(moveNameAt(index), dummy.model, dist)
                     bot.last = "punishing " .. dummy.model.Name .. " after a block"
-                    task.spawn(tapAction, "Move" .. index)
+                    task.spawn(castMove, index)
                     return true
                 elseif dist <= M1_REACH then
                     bot.trades = bot.trades + 1
@@ -2337,7 +2375,7 @@ do
             if index then
                 lastMove = os.clock()
                 brain.Cast(moveNameAt(index), dummy.model, dist)
-                task.spawn(tapAction, "Move" .. index)
+                task.spawn(castMove, index)
                 return
             end
         end
@@ -3774,7 +3812,8 @@ do
     end)
 end
 
-local MACRO_ACTIONS = {"MouseClick", "Move1", "Move2", "Move3", "Move4", "Move5", "Block", "Dodge", "Run", "UseMode"}
+local MACRO_ACTIONS = {"MouseClick", "Move1", "Move2", "Move3", "Move4", "Move5", "Block", "Dodge", "Run", "UseMode",
+    "Space", "MobileJump"}
 local macro = {recording = false, playing = false, loop = false, speed = 1, events = {}, last = "nothing recorded"}
 state.Macro = macro
 do
@@ -3792,21 +3831,30 @@ do
         return string.format("%d presses, %.1fs", #macro.events, length())
     end
 
-    for _, name in ipairs(MACRO_ACTIONS) do
-        local action = gameAction(name)
-        if action then
-            for _, pair in ipairs({{"Pressed", true}, {"Released", false}}) do
-                local ok, signal = pcall(function() return action[pair[1]] end)
-                if ok and typeof(signal) == "RBXScriptSignal" then
-                    connect(signal, function()
-                        if macro.recording and not macro.playing then
-                            macro.events[#macro.events + 1] = {t = os.clock() - startedAt, a = name, d = pair[2]}
-                        end
-                    end)
-                end
+    local recordable, hooked = {}, {}
+    for _, name in ipairs(MACRO_ACTIONS) do recordable[name] = true end
+    local function hook(action)
+        if not recordable[action.Name] or hooked[action] or not action:IsA("InputAction") then return end
+
+        local name = action.Name == "Space" and "MobileJump" or action.Name
+        hooked[action] = true
+        for _, pair in ipairs({{"Pressed", true}, {"Released", false}}) do
+            local ok, signal = pcall(function() return action[pair[1]] end)
+            if ok and typeof(signal) == "RBXScriptSignal" then
+                connect(signal, function()
+                    if macro.recording and not macro.playing then
+                        macro.events[#macro.events + 1] = {t = os.clock() - startedAt, a = name, d = pair[2]}
+                    end
+                end)
             end
         end
     end
+    task.spawn(function()
+        local context = player:WaitForChild("PlayerScripts"):WaitForChild("BaseContext", 30)
+        if not context or not alive then return end
+        for _, action in ipairs(context:GetChildren()) do hook(action) end
+        connect(context.ChildAdded, hook)
+    end)
 
     macro.StartRecording = function()
         if macro.playing then macro.Stop() end
@@ -5678,7 +5726,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.15.2",
+    return BPUI:CreateWindow({Version = "1.15.3",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",
