@@ -3937,6 +3937,18 @@ end
 
 function Window:_boot(opts)
     self.Booted = true
+    if opts.StartClosed then
+        -- start hidden, no pop-in: the player opens it from the top bar icon or the toggle key
+        self.Open = false
+        self.Root.Visible = false
+        self.Body.GroupTransparency = 1
+        self:_blur(false)
+        self:_dockSync()
+        U.sceneSync()
+        task.defer(function() if not self.Destroyed then pcall(self._catStart, self) end end)
+        if self.Current then self:_movePill(self.Current, true) end
+        return
+    end
     self:_popIn()
     task.defer(function() if not self.Destroyed then pcall(self._catStart, self) end end)
     local function ready()
@@ -5980,6 +5992,12 @@ BPUI.Windows = {}
 
 function BPUI:CreateWindow(o)
     o = o or {}
+    -- a hub can set BPUI.DefaultStartClosed: the windows of the games it loads then start closed,
+    -- unless the game's own script says otherwise
+    if o.StartClosed == nil and type(BPUI.DefaultStartClosed) == "function" then
+        local okClosed, closed = pcall(BPUI.DefaultStartClosed)
+        o.StartClosed = okClosed and closed == true
+    end
     local gone
 
     local version = o.Version or "1.14.1"
@@ -5997,6 +6015,7 @@ function BPUI:CreateWindow(o)
         Size = o.Size,
         Scene = o.Scene,
         Icon = "cat",
+        StartClosed = o.StartClosed == true,
 
         Theme = Vanta.ThemeActive(o.Theme) and o.Theme or nil,
     })

@@ -21,7 +21,7 @@ local RunService = game:GetService("RunService")
 local env = getgenv and getgenv() or _G
 if env.__FF_WORKER then pcall(env.__FF_WORKER) end
 
-local cfg = {enabled = false, offsetMs = 0, humanize = false, missChance = 2, goodChance = 10, jitter = 15,
+local cfg = {enabled = false, offsetMs = 0, humanize = false, missChance = 2, goodChance = 10, okChance = 0, badChance = 0, jitter = 15,
     aim = false, aimTarget = 96}
 local fw
 local conns = {}
@@ -106,11 +106,20 @@ local function planFor(note)
             p.ms = side * (60 + math.random() * 22)
         end
     elseif cfg.humanize then
+
+        local hold = (tonumber(note.Length) or 0) > 0
+        if hold then side = -1 end
         local roll = math.random() * 100
         if roll < cfg.missChance then
             p.skip = true
         elseif roll < cfg.missChance + cfg.goodChance then
-            p.ms = side * (56 + math.random() * 26)
+            p.ms = side * (hold and 85 + math.random() * 30 or 56 + math.random() * 26)
+        elseif roll < cfg.missChance + cfg.goodChance + cfg.okChance then
+
+            p.ms = side * (hold and 160 + math.random() * 14 or 118 + math.random() * 14)
+        elseif roll < cfg.missChance + cfg.goodChance + cfg.okChance + cfg.badChance then
+
+            p.ms = side * (hold and 176 + math.random() * 8 or 160 + math.random() * 12)
         else
             p.ms = (math.random() * 2 - 1) * cfg.jitter
         end
@@ -251,6 +260,19 @@ env.__FF_WORKER = stop
 task.spawn(function()
     while alive do
         local counts = song.counts or {}
+        -- the game's own running score for every player in this song (what its score bar shows)
+        local myScore, scoreMap
+        pcall(function()
+            local g = fw and fw.VSRG.GameHandler.Field and fw.VSRG.GameHandler.Field.Game
+            local sc = g and g.Scores and g.Scores.Scores
+            if type(sc) == "table" then
+                scoreMap = {}
+                for name, e in pairs(sc) do
+                    if type(e) == "table" then scoreMap[tostring(name)] = math.floor(tonumber(e.Goal or e.Score) or 0) end
+                end
+                myScore = scoreMap[game:GetService("Players").LocalPlayer.Name]
+            end
+        end)
         pcall(function()
             ch:Fire("stat", {
                 status = status, presses = presses, title = song.title or "-", playing = status == "playing",
@@ -258,6 +280,7 @@ task.spawn(function()
                 combo = song.combo or 0, best = song.best or 0,
                 sick = counts.Sick or 0, good = counts.Good or 0, ok = counts.Ok or 0, bad = counts.Bad or 0,
                 found = fw ~= nil, missLog = table.concat(missLog, "\n"),
+                score = myScore, scores = scoreMap,
             })
         end)
         task.wait(0.25)
@@ -268,7 +291,7 @@ if not started then ch:Fire("stat", {status = "worker failed: " .. tostring(star
 ]==]
 
 local auto = {
-    enabled = false, offsetMs = 0, humanize = false, missChance = 2, goodChance = 10, jitter = 15,
+    enabled = false, offsetMs = 0, humanize = false, missChance = 2, goodChance = 10, okChance = 0, badChance = 0, jitter = 15,
     aim = false, aimTarget = 96,
 }
 local live = {status = "starting", presses = 0, title = "-", playing = false, acc = 100, judged = 0, misses = 0,
@@ -310,6 +333,10 @@ local function startWorker()
             if live.playing and live.title ~= data.title then logSong(live) end
             if live.playing and not data.playing then logSong(live) end
             for k, v in pairs(data) do live[k] = v end
+            -- keep the last score seen while a song was playing: the game clears it once the song ends
+            if data.playing and data.score and data.score > 0 then
+                live.lastScore, live.lastScores, live.lastScoreTitle = data.score, data.scores, data.title
+            end
             live.at = os.clock()
         end))
     end
@@ -328,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.1.1",
+local window = BPUI:CreateWindow({Version = "1.2.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -376,17 +403,23 @@ local aimSec = tab:CreateSection("Accuracy target")
 ctl.aim = aimSec:AddToggle({Name = "Aim for an accuracy", Default = false, Flag = "ff_aim",
     Description = "Plays perfect while under the target and takes Goods, and the odd miss, while over it. Replaces Humanize while on.",
     Callback = function(v) set("aim", v == true) end})
-ctl.aimTarget = aimSec:AddSlider({Name = "Target", DependsOn = ctl.aim, Min = 80, Max = 100, Default = 96, Increment = 0.5, Suffix = " %", Flag = "ff_aim_target",
+ctl.aimTarget = aimSec:AddSlider({Name = "Target", DependsOn = ctl.aim, Min = 80, Max = 100, Default = 96, Increment = 0.01, Suffix = " %", Flag = "ff_aim_target",
+    Description = "Click the number to type one, like 99.50.",
     Callback = function(v) set("aimTarget", tonumber(v) or 96) end})
 
 local human = tab:CreateSection("Humanize")
 ctl.humanize = human:AddToggle({Name = "Humanize", Default = false, Flag = "ff_humanize",
-    Description = "Mixes in misses, Goods and small timing errors so it doesn't play perfectly.",
+    Description = "Mixes in misses, Goods, Oks, Bads and small timing errors so it doesn't play perfectly.",
     Callback = function(v) set("humanize", v == true) end})
-ctl.miss = human:AddSlider({Name = "Miss chance", DependsOn = ctl.humanize, Min = 0, Max = 15, Default = 2, Increment = 1, Suffix = " %", Flag = "ff_miss",
+ctl.miss = human:AddSlider({Name = "Miss chance", DependsOn = ctl.humanize, Min = 0, Max = 15, Default = 2, Increment = 0.01, Suffix = " %", Flag = "ff_miss",
+    Description = "Click the number to type one, like 2.73.",
     Callback = function(v) set("missChance", tonumber(v) or 0) end})
-ctl.good = human:AddSlider({Name = "Good chance", DependsOn = ctl.humanize, Min = 0, Max = 40, Default = 10, Increment = 1, Suffix = " %", Flag = "ff_good",
+ctl.good = human:AddSlider({Name = "Good chance", DependsOn = ctl.humanize, Min = 0, Max = 40, Default = 10, Increment = 0.01, Suffix = " %", Flag = "ff_good",
     Callback = function(v) set("goodChance", tonumber(v) or 0) end})
+ctl.ok = human:AddSlider({Name = "Ok chance", DependsOn = ctl.humanize, Min = 0, Max = 20, Default = 0, Increment = 0.01, Suffix = " %", Flag = "ff_ok",
+    Callback = function(v) set("okChance", tonumber(v) or 0) end})
+ctl.bad = human:AddSlider({Name = "Bad chance", DependsOn = ctl.humanize, Min = 0, Max = 20, Default = 0, Increment = 0.01, Suffix = " %", Flag = "ff_bad",
+    Callback = function(v) set("badChance", tonumber(v) or 0) end})
 ctl.jitter = human:AddSlider({Name = "Timing jitter", DependsOn = ctl.humanize, Min = 0, Max = 45, Default = 15, Increment = 1, Suffix = " ms", Flag = "ff_jitter",
     Description = "Random error on normal hits. Anything under 50 ms still counts as Sick.",
     Callback = function(v) set("jitter", tonumber(v) or 0) end})
@@ -394,8 +427,8 @@ ctl.jitter = human:AddSlider({Name = "Timing jitter", DependsOn = ctl.humanize, 
 local PRESET_FILE = "FFAutoplay/presets.json"
 local BUILT_IN = {
     {name = "Perfect", s = {offset = 0, humanize = false, aim = false}},
-    {name = "Looks human", s = {offset = 0, humanize = true, miss = 2, good = 10, jitter = 15, aim = false}},
-    {name = "Sloppy", s = {offset = 0, humanize = true, miss = 6, good = 25, jitter = 35, aim = false}},
+    {name = "Looks human", s = {offset = 0, humanize = true, miss = 2, good = 10, ok = 0, bad = 0, jitter = 15, aim = false}},
+    {name = "Sloppy", s = {offset = 0, humanize = true, miss = 6, good = 25, ok = 4, bad = 1.5, jitter = 35, aim = false}},
     {name = "Aim for 95%", s = {offset = 0, aim = true, aimTarget = 95}},
 }
 local userPresets = {}
@@ -429,7 +462,7 @@ local function findPreset(name)
 end
 
 local function currentSettings()
-    return {offset = auto.offsetMs, humanize = auto.humanize, miss = auto.missChance, good = auto.goodChance,
+    return {offset = auto.offsetMs, humanize = auto.humanize, miss = auto.missChance, good = auto.goodChance, ok = auto.okChance, bad = auto.badChance,
         jitter = auto.jitter, aim = auto.aim, aimTarget = auto.aimTarget}
 end
 
@@ -439,6 +472,8 @@ local function applySettings(s)
     if num(s.offset, -40, 40) then ctl.offset:Set(num(s.offset, -40, 40)) end
     if num(s.miss, 0, 15) then ctl.miss:Set(num(s.miss, 0, 15)) end
     if num(s.good, 0, 40) then ctl.good:Set(num(s.good, 0, 40)) end
+    if num(s.ok, 0, 20) then ctl.ok:Set(num(s.ok, 0, 20)) end
+    if num(s.bad, 0, 20) then ctl.bad:Set(num(s.bad, 0, 20)) end
     if num(s.jitter, 0, 45) then ctl.jitter:Set(num(s.jitter, 0, 45)) end
     if num(s.aimTarget, 80, 100) then ctl.aimTarget:Set(num(s.aimTarget, 80, 100)) end
     if type(s.humanize) == "boolean" then ctl.humanize:Set(s.humanize) end
@@ -514,6 +549,1457 @@ task.spawn(function()
             missText:SetContent((live.missLog and live.missLog ~= "") and live.missLog or "none")
         end)
         task.wait(0.5)
+    end
+end)
+
+
+-- ===================== Auto farm with other account =====================
+-- Two accounts share a stage: the winner plays perfect, the loser aims a hair lower, so the winner takes every duet.
+-- Both accounts run this script and type the same two usernames. Lengths of songs live in FFAutoFarm/song_lengths.json.
+local PAIR_FOLDER = "FFAutoFarm"
+local SONG_CACHE = PAIR_FOLDER .. "/song_lengths.json"
+local MIN_SONG_LEN = 31 -- the game ignores songs under its own MinSongLength (30s, +1 for rounding)
+-- measured lengths (seconds) used until you scan; "pack|song"
+local SEED_SONGS = {
+    {"DaveBambiVolumes", "DaveBambiVolumes_Master", 36},
+    {"HolidayMod", "HolidayMod_Jawa", 36},
+    {"VSDaveBambi", "VSDaveBambi_Master", 36},
+    {"Hazyriver", "Hazyriver_Fading", 43},
+    {"VSDaniel", "VSDaniel_Spamton", 43},
+    {"VSGarcello", "VSGarcello_Fading", 43},
+    {"VSJared", "VSJared_Mullin", 47},
+    {"FireInTheHole", "FireInTheHole_FiringHoles", 48},
+    {"VSDaniel", "VSDaniel_Sans", 49},
+    {"HoloFunk", "HoloFunk_Leaveitalltome", 54},
+    {"KreadianFunk", "KreadianFunk_Mystery", 55},
+    {"VSUniqueGeese", "VSUniqueGeese_Geesetune", 56},
+    {"HoloFunk", "HoloFunk_TutorialMio", 58},
+    {"HoloFunk", "HoloFunk_TutorialNene", 58},
+}
+
+local pairCfg = {on = false, winner = "", loser = "", loserAcc = 99, song = "wins", -- song: "wins" or "score"
+    hopOn = false, hopMin = 30} -- timed hop: leave the server after hopMin minutes
+local serverJoinedAt = os.clock() -- the script reloads in every new server, so this is when we got here
+-- "Best for score": a long, dense chart. Pack / song / chart names as the selector lists them.
+local SCORE_SONG = {pack = "VSBob", song = "VSBob_Run", chart = "Insane"}
+state.PairCfg = pairCfg -- lets other scripts (or a test) read/set the duo-farm options
+
+local function pjson(path)
+    if type(isfile) == "function" and isfile(path) then
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+        if ok and type(data) == "table" then return data end
+    end
+end
+local function pwrite(path, tbl)
+    if type(writefile) == "function" then pcall(function() writefile(path, HttpService:JSONEncode(tbl)) end) end
+end
+if type(makefolder) == "function" and type(isfolder) == "function" and not isfolder(PAIR_FOLDER) then
+    pcall(makefolder, PAIR_FOLDER)
+end
+
+-- ---------- song selector helpers ----------
+local function selFrame()
+    local pg = plr:FindFirstChild("PlayerGui")
+    local gg = pg and pg:FindFirstChild("GameGui")
+    local w = gg and gg:FindFirstChild("Windows")
+    local s = w and w:FindFirstChild("SongSelectorNew")
+    return s, s and s:FindFirstChild("Frame")
+end
+
+local function clickBtn(b)
+    local ok, conns2 = pcall(getconnections, b.MouseButton1Click)
+    if ok then
+        for _, c in ipairs(conns2) do pcall(function() c:Fire() end) end
+    end
+end
+
+local function parseLen(t)
+    local m, s = tostring(t):match("(%d+):(%d%d)")
+    if m then return tonumber(m) * 60 + tonumber(s) end
+    return nil
+end
+
+-- select a song button + a chart (a given one, else the first of Normal/Easy/Hard); returns the length in seconds (or nil)
+local function measure(frame, songBtn, chart)
+    local det = frame.Center.Details
+    local dur = det.ChartDetails.Metrics.Duration
+    clickBtn(songBtn)
+    local t0 = os.clock()
+    while os.clock() - t0 < 0.4 and parseLen(dur.Text) do task.wait(0.05) end -- let it reset to "?"
+    local inner = det.ChartArea.Charts.Inner
+    for _, n in ipairs(chart and {chart} or {"Normal", "Easy", "Hard"}) do
+        local cb = inner:FindFirstChild(n)
+        if cb and cb.Visible then clickBtn(cb) break end
+        if chart then return nil end -- asked for a chart this song doesn't show
+    end
+    t0 = os.clock()
+    while os.clock() - t0 < 4 do
+        local l = parseLen(dur.Text)
+        if l then return l end
+        task.wait(0.05)
+    end
+    return nil
+end
+
+local function songButtons(list)
+    local t = {}
+    for _, b in ipairs(list:GetChildren()) do
+        if b:IsA("TextButton") then t[#t + 1] = b end
+    end
+    return t
+end
+
+-- ---------- scanner: reads every song's length straight from the game's song data ----------
+-- The selector shows a song's length once its audio has loaded, so we load every track in parallel
+-- (no clicking through the UI) and compute it the way the selector does. Takes about two minutes.
+local scanning = false
+local SCAN_WORKER = [==[
+local id = ...
+local ch = get_comm_channel(id)
+local ok, err = pcall(function()
+    local fw = filtergc("table", {Keys = {"VSRG", "Configs"}}, true)
+    local out = {}
+    for key, s in pairs(fw.Songs.SongData) do
+        if type(s) == "table" and s.Active ~= false and type(s.AudioByChart) == "table" then
+            local pick
+            for _, n in ipairs({"Normal", "Easy", "Hard"}) do if s.AudioByChart[n] then pick = n break end end
+            if not pick then pick = next(s.AudioByChart) end
+            local entries = {}
+            for _, e in ipairs(s.AudioByChart[pick] or {}) do
+                local ids = {}
+                for _, l in ipairs(e.Layers or {}) do
+                    if l.AssetId then ids[#ids + 1] = tostring(l.AssetId) end
+                end
+                entries[#entries + 1] = ids
+            end
+            out[#out + 1] = {key = s.FullName or key, pack = s.Category, speed = s.PlaybackSpeed or 1,
+                end_ = tonumber(s.EndTime), entries = entries}
+        end
+    end
+    ch:Fire("songs", out)
+end)
+if not ok then ch:Fire("songs", {error = tostring(err)}) end
+]==]
+
+-- returns the number of songs written, or nil + a reason
+local function fastScan(report)
+    if scanning then return nil, "already scanning" end
+    if type(run_on_actor) ~= "function" or type(create_comm_channel) ~= "function" then
+        return nil, "this executor can't run code inside the game's actor"
+    end
+    local actor = plr:FindFirstChild("PlayerScripts") and plr.PlayerScripts:FindFirstChild("ClientActor")
+    if not actor then return nil, "the game hasn't loaded yet" end
+    scanning = true
+    local ok, n, why = pcall(function()
+        local songs
+        local cid, chan = create_comm_channel()
+        local conn = chan.Event:Connect(function(kind, data) if kind == "songs" then songs = data end end)
+        run_on_actor(actor, SCAN_WORKER, cid)
+        local w = os.clock()
+        while not songs and os.clock() - w < 15 do task.wait(0.1) end
+        conn:Disconnect()
+        if not songs or songs.error then return nil, "couldn't read the song data: " .. tostring(songs and songs.error) end
+
+        local ids, seen = {}, {}
+        for _, s in ipairs(songs) do
+            for _, e in ipairs(s.entries) do
+                for _, a in ipairs(e) do
+                    if not seen[a] then seen[a] = true ids[#ids + 1] = a end
+                end
+            end
+        end
+        local lengths, pending, idx, done = {}, 0, 1, 0
+        local CONC, TIMEOUT = 60, 8
+        local folder = Instance.new("Folder")
+        folder.Name = "FFScan"
+        folder.Parent = game:GetService("SoundService")
+        local function launch(a)
+            pending += 1
+            task.spawn(function()
+                local snd = Instance.new("Sound")
+                snd.Volume = 0
+                snd.SoundId = "rbxassetid://" .. a
+                snd.Parent = folder
+                local t = os.clock()
+                while not snd.IsLoaded and os.clock() - t < TIMEOUT do task.wait(0.05) end
+                if snd.IsLoaded and snd.TimeLength > 0 then lengths[a] = snd.TimeLength end
+                snd:Destroy()
+                pending -= 1
+                done += 1
+            end)
+        end
+        local lastReport = 0
+        while (idx <= #ids or pending > 0) and scanning do
+            while pending < CONC and idx <= #ids do launch(ids[idx]) idx += 1 end
+            if report and os.clock() - lastReport > 1 then lastReport = os.clock() report(done, #ids) end
+            task.wait(0.05)
+        end
+        folder:Destroy()
+        if not scanning then return nil, "stopped" end
+
+        -- the selector's formula: per entry the longest layer, summed, divided by the song's playback speed
+        local res = pjson(SONG_CACHE) or {}
+        local count = 0
+        for _, s in ipairs(songs) do
+            local total, complete = 0, #s.entries > 0
+            for _, e in ipairs(s.entries) do
+                local m
+                for _, a in ipairs(e) do if lengths[a] then m = math.max(m or 0, lengths[a]) end end
+                if m then total += m else complete = false end
+            end
+            if s.end_ and s.end_ > 0 then total = math.min(total, s.end_) end
+            if complete and total > 0 then
+                res[tostring(s.pack or "?") .. "|" .. s.key] = math.floor(total / s.speed + 0.5)
+                count += 1
+            end
+        end
+        pwrite(SONG_CACHE, res)
+        return count
+    end)
+    scanning = false
+    if not ok then return nil, tostring(n) end
+    return n, why
+end
+
+-- all known songs at least MIN_SONG_LEN long, shortest first
+local function songCandidates()
+    local list, seen = {}, {}
+    local cache = pjson(SONG_CACHE) or {}
+    for k, v in pairs(cache) do
+        if type(v) == "number" and v >= MIN_SONG_LEN then list[#list + 1] = {k, v} seen[k] = true end
+    end
+    for _, e in ipairs(SEED_SONGS) do
+        local k = e[1] .. "|" .. e[2]
+        if not seen[k] and e[3] >= MIN_SONG_LEN then list[#list + 1] = {k, e[3]} end
+    end
+    table.sort(list, function(a, b) return a[2] < b[2] end)
+    return list
+end
+
+-- selects the shortest eligible song + a chart; true when the chart's length matches what we expect
+local function pickShortest()
+    local sel, frame = selFrame()
+    if not (sel and sel.Visible and frame) then return false, "selector hidden" end
+    local list = songCandidates()
+    if #list == 0 then return false, "no song lengths known" end
+    for i = 1, math.min(#list, 8) do
+        local key, len = list[i][1], list[i][2]
+        local pack, song = key:match("^(.-)|(.*)$")
+        local packBtn = frame.Center.Categories.Mods.ModPackList:FindFirstChild(pack)
+        if packBtn then
+            clickBtn(packBtn)
+            local songBtn
+            local t0 = os.clock()
+            while os.clock() - t0 < 4 and not songBtn do
+                task.wait(0.1)
+                songBtn = frame.Center.Songs.SongListBacking.SongList:FindFirstChild(song)
+            end
+            if songBtn then
+                local l = measure(frame, songBtn)
+                if l and math.abs(l - len) <= 2 and l >= MIN_SONG_LEN then return true, key .. " " .. l .. "s" end
+            end
+        end
+    end
+    return false, "none of the known songs could be selected"
+end
+
+-- ---------- the full song list, for the custom song search ----------
+local CUSTOM_FILE = PAIR_FOLDER .. "/custom_song.json" -- shared by both accounts: {pack, song, chart, title, packName}
+local INDEX_WORKER = [==[
+local id = ...
+local ch = get_comm_channel(id)
+local ok, err = pcall(function()
+    local fw = filtergc("table", {Keys = {"VSRG", "Configs"}}, true)
+    local out = {}
+    for key, s in pairs(fw.Songs.SongData) do
+        if type(s) == "table" and s.Active ~= false then
+            local charts = {}
+            for c in pairs(s.Charts or {}) do charts[#charts + 1] = tostring(c) end
+            out[#out + 1] = {key = s.FullName or key, pack = s.Category, packName = s.Name, title = s.Title,
+                author = s.Author, charts = charts}
+        end
+    end
+    ch:Fire("index", out)
+end)
+if not ok then ch:Fire("index", {error = tostring(err)}) end
+]==]
+
+local function chartRank(n) return ({Easy = 1, Normal = 2, Hard = 3, Insane = 4})[n] or 5 end
+
+local songIndex -- every song: {key, pack, packName, title, author, charts, hay}
+local function loadSongIndex()
+    if songIndex then return songIndex end
+    if type(run_on_actor) ~= "function" or type(create_comm_channel) ~= "function" then
+        return nil, "this executor can't read the game's song data"
+    end
+    local actor = plr:FindFirstChild("PlayerScripts") and plr.PlayerScripts:FindFirstChild("ClientActor")
+    if not actor then return nil, "the game hasn't loaded yet" end
+    local got
+    local cid, chan = create_comm_channel()
+    local conn = chan.Event:Connect(function(kind, data) if kind == "index" then got = data end end)
+    run_on_actor(actor, INDEX_WORKER, cid)
+    local w = os.clock()
+    while not got and os.clock() - w < 15 do task.wait(0.1) end
+    conn:Disconnect()
+    if not got or got.error then return nil, "couldn't read the song data: " .. tostring(got and got.error) end
+    local list = {}
+    for _, s in ipairs(got) do
+        local title = tostring(s.title or s.key):gsub("<[^>]->", "")
+        local packName = tostring(s.packName or s.pack or ""):gsub("<[^>]->", "")
+        local charts = s.charts
+        table.sort(charts, function(a, b) return chartRank(a) < chartRank(b) end)
+        list[#list + 1] = {key = s.key, pack = s.pack, packName = packName, title = title,
+            author = tostring(s.author or ""), charts = charts,
+            hay = (title .. " " .. packName .. " " .. tostring(s.key) .. " " .. tostring(s.author or "")):lower()}
+    end
+    table.sort(list, function(a, b) return a.title:lower() < b.title:lower() end)
+    songIndex = list
+    return list
+end
+
+-- every word of the query must appear in the title, pack, id or artist; titles that start with it come first
+local function searchSongs(query, limit)
+    local list = songIndex
+    if not list then return {} end
+    local q = tostring(query or ""):lower()
+    local words = {}
+    for w in q:gmatch("%S+") do words[#words + 1] = w end
+    local out = {}
+    for _, e in ipairs(list) do
+        local ok = true
+        for _, w in ipairs(words) do
+            if not e.hay:find(w, 1, true) then ok = false break end
+        end
+        if ok then out[#out + 1] = e end
+    end
+    table.sort(out, function(a, b)
+        local sa, sb = a.title:lower():sub(1, #q) == q, b.title:lower():sub(1, #q) == q
+        if sa ~= sb then return sa end
+        return a.title:lower() < b.title:lower()
+    end)
+    local trimmed = {}
+    for i = 1, math.min(#out, limit or 40) do trimmed[i] = out[i] end
+    return trimmed
+end
+
+local function customChoice()
+    local c = pjson(CUSTOM_FILE)
+    if c and c.pack and c.song then return c end
+end
+
+local function saveCustom(e, chart)
+    pwrite(CUSTOM_FILE, {pack = e.pack, song = e.key, chart = chart, title = e.title, packName = e.packName})
+end
+
+-- selects one song + chart in the selector; true when that chart's length loaded
+local function pickSpecific(pack, song, chart)
+    local sel, frame = selFrame()
+    if not (sel and sel.Visible and frame) then return false, "selector hidden" end
+    local packBtn = frame.Center.Categories.Mods.ModPackList:FindFirstChild(pack)
+    if not packBtn then return false, "pack missing: " .. tostring(pack) end
+    clickBtn(packBtn)
+    local songBtn
+    local t0 = os.clock()
+    while os.clock() - t0 < 4 and not songBtn do
+        task.wait(0.1)
+        songBtn = frame.Center.Songs.SongListBacking.SongList:FindFirstChild(song)
+    end
+    if not songBtn then return false, "song missing: " .. tostring(song) end
+    local l = measure(frame, songBtn, chart)
+    if not l then return false, "couldn't select the " .. tostring(chart or "default") .. " chart" end
+    return true, tostring(song) .. " " .. tostring(chart or "") .. " " .. l .. "s"
+end
+
+-- the chart our vote has to be on, when the mode asks for a specific one
+local function wantedChart()
+    if pairCfg.song == "score" then return SCORE_SONG.chart end
+    if pairCfg.song == "custom" then
+        local c = customChoice()
+        return c and c.chart
+    end
+end
+
+local function pickChosen()
+    if pairCfg.song == "score" then return pickSpecific(SCORE_SONG.pack, SCORE_SONG.song, SCORE_SONG.chart) end
+    if pairCfg.song == "custom" then
+        local c = customChoice()
+        if c then return pickSpecific(c.pack, c.song, c.chart) end
+        -- nothing chosen yet: keep farming with the shortest song rather than sitting idle
+        local ok, info = pickShortest()
+        return ok, "no custom song chosen yet, used the shortest: " .. tostring(info)
+    end
+    return pickShortest()
+end
+
+-- one of the values in our own selector row ("Chart", "Song", ...), e.g. the difficulty we voted for
+local function myRowValue(sel, name)
+    local sf = sel:FindFirstChild("Players") and sel.Players:FindFirstChild("ScrollingFrame")
+    local row = sf and sf:FindFirstChild(tostring(plr.UserId))
+    local v = row and row:FindFirstChild("Rows") and row.Rows:FindFirstChild(name)
+    v = v and v:FindFirstChild("Value")
+    return v and v.Text or nil
+end
+
+-- Is our vote in? true = our row in the selector still says "Choosing..." (not readied), false = readied,
+-- nil = can't tell (row missing). Pressing play again would undo our vote, so only press when this is true.
+local function stillChoosing(sel)
+    local sf = sel:FindFirstChild("Players") and sel.Players:FindFirstChild("ScrollingFrame")
+    local row = sf and sf:FindFirstChild(tostring(plr.UserId))
+    if not row then return nil end
+    for _, d in ipairs(row:GetDescendants()) do
+        if d:IsA("TextLabel") and d.Text == "Choosing..." then return true end
+    end
+    return false
+end
+
+-- ---------- the farm itself ----------
+local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
+    local TeleportService = game:GetService("TeleportService")
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    local keyCode = Enum.KeyCode.E
+    local PLAYER_1, PLAYER_2 = winnerName, loserName
+    local partnerName = (plr.Name == PLAYER_1) and PLAYER_2 or PLAYER_1
+    local isLeader = (plr.Name == PLAYER_1)
+    local isHopping = false
+    local myConns = {}
+    local hopStartedAt -- when the current hop began; the watchdog below gives up on a hop that goes nowhere
+    local HOP_MAX_SECONDS = 150
+
+    -- Protection: a loop that hits an error (a map object missing mid-teleport, a bad web reply...) is restarted
+    -- after a short pause instead of dying silently and leaving the farm half-dead.
+    local function supervise(name, body)
+        task.spawn(function()
+            local fails = 0
+            while alive() do
+                local ok, err = pcall(body)
+                if ok then return end
+                fails += 1
+                warn("[DUO FARM] " .. name .. " hit an error and is restarting: " .. tostring(err))
+                task.wait(math.min(2 * fails, 10))
+            end
+        end)
+    end
+
+    -- Roblox kicks an account after 20 idle minutes (error 278); songs are played without real input
+    local VirtualUser = game:GetService("VirtualUser")
+    table.insert(myConns, plr.Idled:Connect(function()
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end))
+
+    local VISITED_FILE = PAIR_FOLDER .. "/visited_servers.json"
+    local HOP_FILE = PAIR_FOLDER .. "/hop_target.json"
+    local CLAIM_FILE = PAIR_FOLDER .. "/stage_claim.json"
+    local VISITED_TTL, MAX_VISITED, HOP_ENTRY_MAX_AGE = 600, 50, 120
+    local GRACE_LEADER, GRACE_FOLLOWER = 2, 5
+    local STAGE_CHECK_START, STAGE_CHECK_INTERVAL, STAGE_MISSES_TO_HOP = 8, 1, 3
+    local CLAIM_MAX_AGE, TP_START_DELAY, ALT_WAIT, VERIFY_TIMEOUT = 60, 3, 20, 15
+    local READY_RETRY = 5 -- seconds to wait for the ready-up to register before pressing again
+    local LEADER_SIDE, FOLLOWER_SIDE = "Left", "Right" -- swap if the winner sits on the wrong side
+
+    -- a freshly joined server can be slow or odd: wait with time limits, never forever
+    if not plr.Character then
+        local got = false
+        local conn = plr.CharacterAdded:Connect(function() got = true end)
+        local t0 = os.clock()
+        while not got and not plr.Character and os.clock() - t0 < 30 do task.wait(0.25) end
+        conn:Disconnect()
+    end
+    if plr.Character then plr.Character:WaitForChild("HumanoidRootPart", 15) end
+    plr:WaitForChild("PlayerGui", 15)
+    local mapFolder = workspace:WaitForChild("Map", 30)
+    local stages = mapFolder and mapFolder:WaitForChild("Stages", 30)
+    if not stages then
+        setStatus("the map didn't load, starting over")
+        if onStuck then onStuck("map not found") end
+        return function() for _, c in ipairs(myConns) do pcall(function() c:Disconnect() end) end end
+    end
+    task.wait(2)
+    if not alive() then return end
+
+    -- instant proximity prompts
+    local function makeInstant(obj)
+        if obj:IsA("ProximityPrompt") then pcall(function() obj.HoldDuration = 0 end) end
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do makeInstant(obj) end
+    table.insert(myConns, workspace.DescendantAdded:Connect(makeInstant))
+    task.spawn(function()
+        while alive() and task.wait(10) do
+            for _, obj in ipairs(workspace:GetDescendants()) do makeInstant(obj) end
+        end
+    end)
+
+    -- visited servers
+    local function countKeys(t) local n = 0 for _ in pairs(t) do n += 1 end return n end
+    local function loadVisited()
+        local visited, data = {}, pjson(VISITED_FILE)
+        if data then
+            for id, t in pairs(data) do
+                if type(t) == "number" and os.time() - t < VISITED_TTL then visited[id] = t end
+            end
+        end
+        return visited
+    end
+    local function trimVisited(visited)
+        if countKeys(visited) > MAX_VISITED then visited = {} end
+        visited[game.JobId] = os.time()
+        return visited
+    end
+    local visitedServers = trimVisited(loadVisited())
+    pwrite(VISITED_FILE, visitedServers)
+
+    local function safeHttpGet(url)
+        local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+        if req then
+            local ok, res = pcall(function() return req({Url = url, Method = "GET", Headers = {["User-Agent"] = "Roblox/WinInet"}}) end)
+            if ok and res and res.StatusCode == 200 and res.Body then return res.Body end
+        end
+        local ok, body = pcall(function() return game:HttpGet(url) end)
+        if ok and body and body ~= "" then return body end
+        return nil
+    end
+
+    local teleportFailed = false
+    table.insert(myConns, TeleportService.TeleportInitFailed:Connect(function(_, result, message)
+        warn("[DUO FARM] Teleport failed: " .. tostring(result) .. " - " .. tostring(message))
+        teleportFailed = true
+    end))
+    -- returns normally only when the teleport did NOT take us away (it failed, or nothing happened in time)
+    local function teleportTo(target, waitTime)
+        if type(target) ~= "string" or target == "" or target == game.JobId then return end -- never "hop" to where we are
+        teleportFailed = false
+        local ok, err = pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, target, plr) end)
+        if not ok then
+            warn("[DUO FARM] teleport call errored: " .. tostring(err))
+            return
+        end
+        local waited = 0
+        while waited < waitTime and not teleportFailed do
+            task.wait(0.5)
+            waited += 0.5
+        end
+    end
+
+    -- stage helpers
+    local function isStageFree(stage)
+        if stage.Name:lower() == "boss" then return false end
+        local ws = stage:FindFirstChild("Workspaces")
+        if not ws then return false end
+        for _, child in ipairs(ws:GetChildren()) do
+            if child.Name ~= "Shared" then return false end
+        end
+        return true
+    end
+    local function hasAvailableStage()
+        for _, stage in ipairs(stages:GetChildren()) do
+            if isStageFree(stage) then return true, stage end
+        end
+        return false, nil
+    end
+    local function stageKey(stage)
+        local teams = stage:FindFirstChild("Teams")
+        local ref = teams and teams:FindFirstChild("Left")
+        if not ref then return nil end
+        local p = ref:GetPivot().Position
+        return string.format("%.1f,%.1f,%.1f", p.X, p.Y, p.Z)
+    end
+    local function stageOfPlayer(name)
+        for _, stage in ipairs(stages:GetChildren()) do
+            local ws = stage:FindFirstChild("Workspaces")
+            if ws and ws:FindFirstChild(name, true) then return stage end
+        end
+        return nil
+    end
+    local function bothOnSameStage()
+        for _, stage in ipairs(stages:GetChildren()) do
+            local ws = stage:FindFirstChild("Workspaces")
+            if ws and ws:FindFirstChild(PLAYER_1, true) and ws:FindFirstChild(PLAYER_2, true) then return stage end
+        end
+        return nil
+    end
+    local function pickFreeStage()
+        local list = {}
+        for _, stage in ipairs(stages:GetChildren()) do
+            if isStageFree(stage) then
+                local teams = stage:FindFirstChild("Teams")
+                if teams and teams:FindFirstChild("Left") and teams:FindFirstChild("Right") then table.insert(list, stage) end
+            end
+        end
+        table.sort(list, function(a, b)
+            local pa, pb = a.Teams.Left:GetPivot().Position, b.Teams.Left:GetPivot().Position
+            if pa.X ~= pb.X then return pa.X < pb.X end
+            if pa.Z ~= pb.Z then return pa.Z < pb.Z end
+            return pa.Y < pb.Y
+        end)
+        return list[1]
+    end
+    local function isStageOpenForAlt(stage)
+        if stage.Name:lower() == "boss" then return false end
+        local ws = stage:FindFirstChild("Workspaces")
+        if not ws then return false end
+        for _, child in ipairs(ws:GetChildren()) do
+            if child.Name ~= "Shared" and not child:FindFirstChild(partnerName, true) then return false end
+        end
+        return true
+    end
+    local function findStageForAlt()
+        local leaderStage = stageOfPlayer(partnerName)
+        if leaderStage then
+            if isStageOpenForAlt(leaderStage) then return leaderStage end
+            return nil
+        end
+        local claim = pjson(CLAIM_FILE)
+        if claim and claim.by == partnerName and claim.job == game.JobId and claim.key
+            and type(claim.time) == "number" and os.time() - claim.time < CLAIM_MAX_AGE then
+            for _, stage in ipairs(stages:GetChildren()) do
+                if stageKey(stage) == claim.key and isStageOpenForAlt(stage) then return stage end
+            end
+        end
+        return nil
+    end
+    local function teleportToStage(stage, side)
+        local teams = stage:FindFirstChild("Teams")
+        local spot = teams and teams:FindFirstChild(side)
+        local char = plr.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if spot and root then
+            return pcall(function() root.CFrame = spot:GetPivot() + Vector3.new(0, 3, 0) end)
+        end
+        return false
+    end
+
+    -- Failsafe: anyone on our stage who isn't one of the two chosen accounts. A stage keeps one marker per seated
+    -- player (a Configuration named after them), so a real player we didn't choose shows up here.
+    local function strangersOnStage(stage)
+        local out = {}
+        local ws = stage and stage:FindFirstChild("Workspaces")
+        if not ws then return out end
+        for _, d in ipairs(ws:GetDescendants()) do
+            local n = d.Name:lower()
+            if d:IsA("Configuration") and n ~= PLAYER_1:lower() and n ~= PLAYER_2:lower() and Players:FindFirstChild(d.Name) then
+                out[#out + 1] = d.Name
+            end
+        end
+        return out
+    end
+    local function ourStage() return stageOfPlayer(plr.Name) or stageOfPlayer(partnerName) end
+    local intruder -- name of a stranger currently on our stage, or nil: blocks ready-up while set
+
+    -- hop coordination
+    local followBusy, publishedHere, usedNonces = false, false, {}
+    supervise("hop follower", function()
+        local currentJobId = game.JobId
+        while alive() do
+            task.wait(0.3)
+            local entry = pjson(HOP_FILE)
+            if entry and entry.by == partnerName and entry.from == currentJobId and entry.id and entry.nonce
+                and not usedNonces[entry.nonce] and type(entry.time) == "number"
+                and os.time() - entry.time < HOP_ENTRY_MAX_AGE then
+                if not (isLeader and publishedHere) then
+                    usedNonces[entry.nonce] = true
+                    isHopping = true
+                    hopStartedAt = hopStartedAt or os.clock()
+                    followBusy = true
+                    setStatus("following your other account to a new server")
+                    pcall(teleportTo, entry.id, 15)
+                    followBusy = false -- always released, even if the teleport errored or failed
+                end
+            end
+        end
+    end)
+
+    local function findServer()
+        local placeId, currentJobId = game.PlaceId, game.JobId
+        local fresh = loadVisited()
+        for id, t in pairs(visitedServers) do
+            if os.time() - t < VISITED_TTL then fresh[id] = t end
+        end
+        visitedServers = trimVisited(fresh)
+        pwrite(VISITED_FILE, visitedServers)
+        local endpoints = {
+            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+            "https://games.roproxy.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+        }
+        local candidates = {}
+        for _, template in ipairs(endpoints) do
+            local baseUrl = string.format(template, placeId)
+            local cursor
+            for _ = 1, 5 do
+                local url = baseUrl
+                if cursor then url = url .. "&cursor=" .. HttpService:UrlEncode(cursor) end
+                local body = safeHttpGet(url)
+                if not body then break end
+                local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if not ok or type(data) ~= "table" or type(data.data) ~= "table" then break end
+                for _, server in ipairs(data.data) do
+                    -- two free slots so both accounts fit
+                    if server.id and server.id ~= currentJobId and not visitedServers[server.id]
+                        and type(server.playing) == "number" and type(server.maxPlayers) == "number"
+                        and server.playing <= server.maxPlayers - 2 then
+                        table.insert(candidates, server.id)
+                    end
+                end
+                cursor = data.nextPageCursor
+                if not cursor or #candidates >= 20 then break end
+                task.wait(0.5)
+            end
+            if #candidates > 0 then break end
+            task.wait(1)
+        end
+        if #candidates > 0 then return candidates[math.random(1, #candidates)] end
+        return nil
+    end
+
+    -- Hop protections: every step is pcall'd, teleports are at least 8 seconds apart (Roblox rate-limits them),
+    -- failures back off (4s, 8s ... up to 30s) instead of hammering the web API, and the watchdog below abandons
+    -- a hop that goes nowhere so the farm can start over instead of sitting stuck.
+    local function searchLoop()
+        local currentJobId = game.JobId
+        local fails, lastTeleport = 0, -math.huge
+        while alive() do
+            while followBusy and alive() do task.wait(0.3) end
+            local okFind, target = pcall(findServer)
+            if not okFind then
+                warn("[DUO FARM] looking for a server failed: " .. tostring(target))
+                target = nil
+            end
+            while followBusy and alive() do task.wait(0.3) end
+            if not alive() then return end
+            if target then
+                local gap = os.clock() - lastTeleport
+                if gap < 8 then task.wait(8 - gap) end
+                pcall(function()
+                    visitedServers[target] = os.time()
+                    visitedServers[currentJobId] = os.time()
+                    pwrite(VISITED_FILE, visitedServers)
+                    publishedHere = true
+                    pwrite(HOP_FILE, {id = target, from = currentJobId, time = os.time(),
+                        nonce = HttpService:GenerateGUID(false), by = plr.Name})
+                end)
+                setStatus("hopping to a new server")
+                lastTeleport = os.clock()
+                pcall(teleportTo, target, 15)
+                -- still here: the teleport didn't take us anywhere
+                fails += 1
+                setStatus("that hop didn't work (try " .. fails .. "), trying another server")
+            else
+                fails += 1
+                setStatus("no server found yet (try " .. fails .. "), searching again")
+            end
+            task.wait(math.min(4 * fails, 30))
+        end
+    end
+
+    local function serverHop()
+        if isHopping then return end
+        isHopping = true
+        hopStartedAt = os.clock()
+        setStatus("no good stage here, looking for another server")
+        local ok, err = pcall(function()
+            local grace = isLeader and GRACE_LEADER or GRACE_FOLLOWER
+            local waited = 0
+            while waited < grace and not followBusy do
+                task.wait(0.25)
+                waited += 0.25
+            end
+            searchLoop()
+        end)
+        if not ok and alive() then
+            warn("[DUO FARM] the hop errored: " .. tostring(err))
+            if onStuck then onStuck("hop errored") end
+        end
+    end
+
+    -- Watchdog: a hop that hasn't moved us in HOP_MAX_SECONDS is abandoned and the farm restarts in this server
+    supervise("hop watchdog", function()
+        while alive() do
+            task.wait(2)
+            if isHopping and hopStartedAt and os.clock() - hopStartedAt > (state.HopMaxSeconds or HOP_MAX_SECONDS) then
+                warn("[DUO FARM] the hop took too long, starting over in this server")
+                setStatus("the hop didn't work, starting over here")
+                if onStuck then onStuck("hop timed out") end
+                return
+            end
+        end
+    end)
+
+    -- 1. spam E at the stage prompt while we're in the lobby
+    supervise("stage prompt", function()
+        while alive() and task.wait(0.1) do
+            if isHopping then break end
+            local s = selFrame()
+            if s and s.Visible == false and workspace:FindFirstChild(plr.Name) then
+                VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+                task.wait(0.1)
+                VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+            end
+        end
+    end)
+
+    -- 2. one stage teleport per server: winner picks, the other follows the winner's real stage
+    local stageTpDone = false
+    local function verifyTogether()
+        task.spawn(function()
+            local deadline = os.clock() + VERIFY_TIMEOUT
+            while os.clock() < deadline and alive() do
+                if isHopping then return end
+                if bothOnSameStage() then setStatus("both accounts are on the same stage") return end
+                task.wait(1)
+            end
+            if alive() then
+                setStatus("accounts ended up on different stages, hopping")
+                serverHop()
+            end
+        end)
+    end
+    supervise("stage teleport", function()
+        task.wait(TP_START_DELAY)
+        local startedAt = os.clock()
+        while alive() and not stageTpDone and not isHopping do
+            task.wait(0.5)
+            if stageOfPlayer(plr.Name) then
+                stageTpDone = true
+                verifyTogether()
+                break
+            end
+            if not workspace:FindFirstChild(plr.Name) then continue end
+            local stage
+            if isLeader then
+                stage = pickFreeStage()
+                if stage then
+                    pwrite(CLAIM_FILE, {key = stageKey(stage), job = game.JobId, time = os.time(), by = plr.Name})
+                end
+            else
+                stage = findStageForAlt()
+                if not stage and os.clock() - startedAt >= ALT_WAIT then
+                    serverHop()
+                    break
+                end
+            end
+            -- last-moment check: the stage must still be free (or only hold our partner) right before we step on
+            if stage and ((isLeader and not isStageFree(stage)) or (not isLeader and not isStageOpenForAlt(stage))) then
+                stage = nil
+            end
+            if stage then
+                local side = isLeader and LEADER_SIDE or FOLLOWER_SIDE
+                if teleportToStage(stage, side) then
+                    stageTpDone = true
+                    setStatus("on a stage, waiting for the song vote")
+                    verifyTogether()
+                end
+            end
+        end
+    end)
+
+    -- 3. no free stage while both of us are in the lobby -> hop
+    supervise("free stage check", function()
+        task.wait(STAGE_CHECK_START)
+        local misses = 0
+        while alive() and not isHopping do
+            local bothInLobby = workspace:FindFirstChild(plr.Name) and workspace:FindFirstChild(partnerName)
+            if bothInLobby then
+                if hasAvailableStage() then
+                    misses = 0
+                else
+                    misses += 1
+                    if misses >= STAGE_MISSES_TO_HOP then serverHop() break end
+                end
+            else
+                misses = 0
+            end
+            task.wait(STAGE_CHECK_INTERVAL)
+        end
+    end)
+
+    -- 4. partner left, or a stranger joined our stage
+    supervise("partner check", function()
+        task.wait(15)
+        while alive() and task.wait(2) do
+            if isHopping then break end
+            if not Players:FindFirstChild(partnerName) then serverHop() break end
+            if not workspace:FindFirstChild(plr.Name) then
+                for _, stage in stages:GetChildren() do
+                    local workspaces = stage:FindFirstChild("Workspaces")
+                    if workspaces and #workspaces:GetChildren() > 2 then
+                        local left, right = workspaces:FindFirstChild("Left_1"), workspaces:FindFirstChild("Right_1")
+                        if left and right then
+                            local p1InLeft, p2InLeft = left:FindFirstChild(PLAYER_1, true), left:FindFirstChild(PLAYER_2, true)
+                            local p1InRight, p2InRight = right:FindFirstChild(PLAYER_1, true), right:FindFirstChild(PLAYER_2, true)
+                            local hasP1, hasP2 = p1InLeft or p1InRight, p2InLeft or p2InRight
+                            local bothTogether = (p1InLeft and p2InRight) or (p2InLeft and p1InRight)
+                            if not bothTogether and (hasP1 or hasP2) then serverHop() break end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- 5. ready up: pick the shortest eligible song and press play ONCE, check that the vote registered,
+    -- and only press again if it didn't. Never while the other account isn't on the stage yet.
+    supervise("ready up", function()
+        local lastPress = -math.huge
+        local lastTried = -math.huge
+        while alive() and not isHopping do
+            task.wait(0.5)
+            local sel, frame = selFrame()
+            if not (sel and sel.Visible) then
+                lastPress, lastTried = -math.huge, -math.huge -- song started / selector closed: fresh round next time
+            else
+                -- "Play Solo" on the button means the game still sees one player
+                local bothHere = bothOnSameStage() ~= nil and frame.Bottom.Play.PlaySong.Label.Text ~= "Play Solo"
+                if intruder then
+                    setStatus("not readying up, " .. intruder .. " is on our stage")
+                elseif not bothHere then
+                    setStatus("waiting for the other account to join the stage")
+                else
+                    local choosing = stillChoosing(sel)
+                    if choosing == false then
+                        local voted, want = myRowValue(sel, "Chart"), wantedChart()
+                        if want and voted and voted ~= want and os.clock() - lastPress > 3 then
+                            -- we readied up on the wrong difficulty: press play again to un-ready, the retry below re-picks
+                            clickBtn(frame.Bottom.Play.PlaySong)
+                            lastPress = os.clock()
+                            lastTried = -math.huge
+                            setStatus("voted " .. tostring(voted) .. " instead of " .. tostring(want) .. ", un-readying to fix it")
+                        else
+                            setStatus("readied up, waiting for the other account")
+                        end
+                    elseif os.clock() - lastTried > READY_RETRY and (choosing == true or lastPress == -math.huge) then
+                        task.wait(1.5) -- let both accounts settle before voting
+                        if bothOnSameStage() and stillChoosing(sel) ~= false and not intruder
+                            and #strangersOnStage(ourStage()) == 0 then -- checked again right before we vote
+                            lastTried = os.clock()
+                            local ok, good, info = pcall(pickChosen)
+                            if ok and good then
+                                local play = frame.Bottom.Play:FindFirstChild("PlaySong")
+                                if play then
+                                    clickBtn(play)
+                                    lastPress = os.clock()
+                                    state.PlayPresses = (state.PlayPresses or 0) + 1 -- how often we've pressed ready (for checking)
+                                    setStatus("pressed ready with " .. tostring(info) .. ", checking it took")
+                                end
+                            else
+                                setStatus("couldn't pick a song: " .. tostring(good) .. " " .. tostring(info))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- 6. timed hop: leave after N minutes in this server, but between songs so a round isn't thrown away
+    supervise("timed hop", function()
+        local dueSince
+        while alive() and not isHopping do
+            task.wait(1)
+            local limit = (tonumber(pairCfg.hopMin) or 0) * 60
+            if pairCfg.hopOn and limit > 0 and os.clock() - serverJoinedAt >= limit then
+                dueSince = dueSince or os.clock()
+                local sel = selFrame()
+                -- the selector is only open while no song is playing; don't wait more than 3 minutes for it
+                if (sel and sel.Visible) or os.clock() - dueSince > 180 then
+                    setStatus("timed hop: " .. tostring(pairCfg.hopMin) .. " min in this server, hopping")
+                    serverHop()
+                    return
+                end
+            else
+                dueSince = nil
+            end
+        end
+    end)
+
+    -- 7. stranger failsafe: if anyone but our two accounts is on our stage, stop voting and leave the server together.
+    -- Before a song it leaves right away; during one it lets the song finish (the selector reopens), at most 2 minutes.
+    supervise("stranger failsafe", function()
+        local firstSeen
+        while alive() and not isHopping do
+            task.wait(0.5)
+            local stage = ourStage()
+            local strangers = stage and strangersOnStage(stage) or {}
+            if #strangers > 0 then
+                firstSeen = firstSeen or os.clock()
+                intruder = strangers[1]
+                setStatus("stranger on our stage (" .. intruder .. "), leaving this server")
+                local sel = selFrame()
+                if (sel and sel.Visible) or os.clock() - firstSeen > 120 then
+                    serverHop()
+                    return
+                end
+            else
+                firstSeen, intruder = nil, nil
+            end
+        end
+    end)
+
+    -- hand back a cleanup so turning the option off disconnects everything
+    return function()
+        for _, c in ipairs(myConns) do pcall(function() c:Disconnect() end) end
+    end
+end
+
+-- ---------- the options ----------
+local pairTab = window:CreateTab({Name = "Art's duo farm", Icon = "users"})
+local pairSec = pairTab:CreateSection("Auto farm with other account")
+local function trimName(v) return (tostring(v or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+pairSec:AddInput({Name = "Winner username", Placeholder = "account that should win", Flag = "ff_pair_winner",
+    Callback = function(v) pairCfg.winner = trimName(v) end})
+pairSec:AddInput({Name = "Loser username", Placeholder = "account that should lose", Flag = "ff_pair_loser",
+    Callback = function(v) pairCfg.loser = trimName(v) end})
+pairSec:AddSlider({Name = "Loser accuracy", Min = 50, Max = 99.99, Default = 99, Increment = 0.01, Suffix = " %", Flag = "ff_pair_acc",
+    Description = "The winner plays 100%. The loser aims for this one, so it always scores a little lower. Click the number to type one, like 99.99.",
+    Callback = function(v) pairCfg.loserAcc = math.clamp(tonumber(v) or 99, 50, 99.99) end})
+pairSec:AddToggle({Name = "Hop server on a timer", Default = false, Flag = "ff_pair_hop_on",
+    Description = "Both accounts move to a new server after the time below. It waits for the current song to finish.",
+    Callback = function(v) pairCfg.hopOn = v == true end})
+pairSec:AddSlider({Name = "Hop server every", Min = 1, Max = 120, Default = 30, Increment = 1, Suffix = " minute(s)", Flag = "ff_pair_hop_min",
+    Callback = function(v) pairCfg.hopMin = tonumber(v) or 30 end})
+-- the two main modes first, then a custom song picked in the search below
+local SONG_WINS, SONG_SCORE, SONG_CUSTOM = "Best for wins (shortest song)", "Best for score (Bob run on Insane)", "Custom song (search below)"
+pairSec:AddDropdown({Name = "Pick song", Options = {SONG_WINS, SONG_SCORE, SONG_CUSTOM}, Default = SONG_WINS, Flag = "ff_pair_song",
+    Description = "Wins: the shortest song that still counts. Score: the long dense Bob chart. Custom: any song you search for.",
+    Callback = function(v)
+        v = tostring(v)
+        pairCfg.song = v == SONG_SCORE and "score" or v == SONG_CUSTOM and "custom" or "wins"
+    end})
+state.PairToggle = pairSec:AddToggle({Name = "Auto farm with other account", Default = false, Flag = "ff_pair_on",
+    Description = "Run this on both accounts with the same two usernames. They join one stage, vote the shortest song that counts, play it and hop servers when the stage isn't free.",
+    Callback = function(v) pairCfg.on = v == true end})
+local pairStatus = pairSec:AddLabel({Text = "off", Style = "Sub"})
+local uptimeLbl = pairSec:AddLabel({Text = "not running", Style = "Sub"})
+
+-- ---------- custom song: search every song in the game ----------
+local customSec = pairTab:CreateSection("Custom song")
+local customLbl = customSec:AddLabel({Text = "choose \"Custom song\" in Pick song, then search here", Style = "Sub"})
+local resultMap, selectedEntry = {}, nil
+local songDrop, chartDrop
+
+local function mmss(s) return string.format("%d:%02d", s // 60, s % 60) end
+local function songLabel(e, cache)
+    local len = cache[tostring(e.pack) .. "|" .. e.key]
+    local extra = ""
+    if type(len) == "number" then
+        extra = " (" .. mmss(len) .. (len < MIN_SONG_LEN and ", too short to count as a win" or "") .. ")"
+    end
+    return e.title .. " - " .. e.packName .. extra
+end
+local function showCustom()
+    local c = customChoice()
+    pcall(function()
+        customLbl:Set(c and ("chosen: " .. tostring(c.title) .. " (" .. tostring(c.packName) .. ") on " .. tostring(c.chart or "its default chart"))
+            or "no song chosen yet")
+    end)
+end
+-- fills the Song list from a search; returns how many songs matched
+local function runSearch(text)
+    local list, why = loadSongIndex()
+    if not list then
+        window:Notify({Title = "Songs", Content = tostring(why), Type = "Error", Duration = 4})
+        return 0
+    end
+    local cache = pjson(SONG_CACHE) or {}
+    local labels = {}
+    resultMap = {}
+    for _, e in ipairs(searchSongs(text, 40)) do
+        local lbl = songLabel(e, cache)
+        local base, n = lbl, 1
+        while resultMap[lbl] do n += 1 lbl = base .. " #" .. n end
+        resultMap[lbl] = e
+        labels[#labels + 1] = lbl
+    end
+    pcall(function() songDrop:Refresh(#labels > 0 and labels or {"no songs found"}) end)
+    pcall(function() customLbl:Set(#labels .. " songs match (of " .. #list .. "), pick one in the Song list") end)
+    return #labels
+end
+local function pickCustomEntry(e, chart)
+    selectedEntry = e
+    saveCustom(e, chart or e.charts[1])
+    pcall(function() chartDrop:Refresh(e.charts) end)
+    showCustom()
+end
+state.SearchSongs = function(q) loadSongIndex() return searchSongs(q, 40) end -- for checking
+state.SetCustom = pickCustomEntry
+
+customSec:AddInput({Name = "Search every song", Placeholder = "song, pack or artist, then Enter",
+    Callback = function(text) task.spawn(runSearch, tostring(text or "")) end})
+songDrop = customSec:AddDropdown({Name = "Song", Options = {"search above first"}, Default = "search above first",
+    Callback = function(label)
+        local e = resultMap[tostring(label)]
+        if not e then return end
+        -- Normal when the song has it, else the first chart it lists
+        local chart = e.charts[1]
+        for _, c in ipairs(e.charts) do if c == "Normal" then chart = c break end end
+        pickCustomEntry(e, chart)
+    end})
+chartDrop = customSec:AddDropdown({Name = "Difficulty", Options = {"choose a song first"}, Default = "choose a song first",
+    Callback = function(c)
+        if not selectedEntry then return end
+        for _, n in ipairs(selectedEntry.charts) do
+            if n == tostring(c) then saveCustom(selectedEntry, n) showCustom() end
+        end
+    end})
+showCustom()
+
+local scanSec = pairTab:CreateSection("Song lengths")
+local scanStatus = scanSec:AddLabel({Text = "uses the built-in list until you scan", Style = "Sub"})
+local function runScan()
+    task.spawn(function()
+        scanStatus:Set("starting scan")
+        local n, why = fastScan(function(d, t) scanStatus:Set("loading audio " .. d .. " / " .. t) end)
+        scanStatus:Set(n and ("done, " .. n .. " songs measured") or ("scan failed: " .. tostring(why)))
+    end)
+end
+state.RunScan = runScan -- same as the button, for other scripts and tests
+scanSec:AddButton({Name = "Scan every song", ButtonText = "Start / stop", Callback = function()
+    if scanning then
+        scanning = false
+        scanStatus:Set("stopping")
+    else
+        runScan()
+    end
+end})
+
+-- ---------- Discord webhook: one message per win ----------
+local hookSec = pairTab:CreateSection("Discord webhook")
+local hookCfg = {url = "", on = false}
+state.WebhookCfg = hookCfg
+hookSec:AddInput({Name = "Webhook URL", Placeholder = "https://discord.com/api/webhooks/...", Flag = "ff_hook_url",
+    Description = "Saved in plain text in this script's settings file, so don't share that file.",
+    Callback = function(v) hookCfg.url = trimName(v) end})
+hookSec:AddToggle({Name = "Notify on every win", Default = false, Flag = "ff_hook_on",
+    Callback = function(v) hookCfg.on = v == true end})
+
+local function validHook(url)
+    return type(url) == "string"
+        and (url:match("^https://discord%.com/api/webhooks/%d+/[%w_%-]+$") or url:match("^https://discordapp%.com/api/webhooks/%d+/[%w_%-]+$")
+            or url:match("^https://[%w%.]*discord%.com/api/webhooks/%d+/[%w_%-]+$")) ~= nil
+end
+
+-- returns the HTTP status, or nil on failure
+local function postHook(url, payload)
+    if hookCfg.dryRun then return 204 end -- test hook: skip the network
+    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+    if not req then return nil end
+    local ok, res = pcall(req, {Url = url, Method = "POST", Headers = {["Content-Type"] = "application/json"},
+        Body = HttpService:JSONEncode(payload)})
+    return ok and res and res.StatusCode or nil
+end
+
+-- Run stats survive server hops (the script reloads every time): when the farm started, wins and score since then.
+-- A file with no heartbeat for 10 minutes belongs to an earlier run that stopped, so it's ignored.
+local STATS_FILE = PAIR_FOLDER .. "/stats_" .. plr.Name .. ".json"
+local runStats = {}
+do
+    local saved = pjson(STATS_FILE)
+    if saved and saved.startedAt and os.time() - (saved.lastSeen or 0) < 600 then runStats = saved end
+end
+local function saveStats()
+    runStats.lastSeen = os.time()
+    pwrite(STATS_FILE, runStats)
+end
+state.GetRunStats = function() return runStats end -- for checking, same idea as state.PairCfg
+local function fmtDur(sec)
+    sec = math.max(0, math.floor(sec))
+    local d, h, m, s = sec // 86400, sec % 86400 // 3600, sec % 3600 // 60, sec % 60
+    if d > 0 then return string.format("%dd %dh %dm", d, h, m) end
+    if h > 0 then return string.format("%dh %dm", h, m) end
+    if m > 0 then return string.format("%dm %ds", m, s) end
+    return string.format("%ds", s)
+end
+
+local sessionScore = tonumber(runStats.score) or 0 -- score earned on every win since the farm started
+
+-- Lifetime totals: score and wins counted across every hop and every execute, never reset except by the Reset button.
+-- lastWins / lastScore / lastSeen let a win that lands while we're hopping still be counted when the script reloads.
+local LIFE_FILE = PAIR_FOLDER .. "/lifetime_" .. plr.Name .. ".json"
+local lifetime = pjson(LIFE_FILE) or {}
+lifetime.score = tonumber(lifetime.score) or 0
+lifetime.wins = tonumber(lifetime.wins) or 0
+lifetime.since = lifetime.since or os.time()
+local function saveLifetime() pwrite(LIFE_FILE, lifetime) end
+
+local function commas(n)
+    local s = tostring(math.floor((tonumber(n) or 0) + 0.5))
+    local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+    return (out:gsub("^,", ""))
+end
+
+local function winPayload(title, wins, streak)
+    local fields = {
+        {name = "Account", value = plr.Name, inline = true},
+        {name = "Wins", value = tostring(wins), inline = true},
+        {name = "Win streak", value = tostring(streak), inline = true},
+        {name = "Song", value = tostring(live.lastScoreTitle or live.title or "-"), inline = true},
+        {name = "Accuracy", value = string.format("%.2f%%", tonumber(live.acc) or 0), inline = true},
+    }
+    -- the game's score for that song, ours and the other player's
+    if tonumber(live.lastScore) then
+        table.insert(fields, {name = "Score earned", value = commas(live.lastScore), inline = true})
+        local best
+        for name, v in pairs(live.lastScores or {}) do
+            if name ~= plr.Name and (not best or v > best) then best = v end
+        end
+        if best then table.insert(fields, {name = "Opponent score", value = commas(best), inline = true}) end
+        table.insert(fields, {name = "Session score", value = commas(sessionScore), inline = true})
+    end
+    table.insert(fields, {name = "Total score (all hops)", value = commas(lifetime.score), inline = true})
+    table.insert(fields, {name = "Total wins tracked", value = tostring(lifetime.wins), inline = true})
+    if runStats.startedAt then
+        table.insert(fields, {name = "Running for", value = fmtDur(os.time() - runStats.startedAt), inline = true})
+        table.insert(fields, {name = "Wins this run", value = tostring(runStats.wins or 0), inline = true})
+    end
+    return {username = "catn hub", embeds = {{
+        title = title, color = 0x8F70EC, fields = fields,
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    }}}
+end
+
+hookSec:AddButton({Name = "Send a test message", ButtonText = "Test", Callback = function()
+    if not validHook(hookCfg.url) then
+        window:Notify({Title = "Webhook", Content = "That doesn't look like a Discord webhook URL.", Type = "Warning", Duration = 4})
+        return
+    end
+    task.spawn(function()
+        local code = postHook(hookCfg.url, winPayload("Test message", "-", "-"))
+        local good = code and code >= 200 and code < 300
+        window:Notify({Title = "Webhook", Content = good and "Sent, check your channel." or ("Discord said " .. tostring(code or "nothing")),
+            Type = good and "Success" or "Error", Duration = 4})
+    end)
+end})
+
+hookSec:AddButton({Name = "Reset score and win totals", ButtonText = "Reset", Callback = function()
+    lifetime = {score = 0, wins = 0, since = os.time(), lastWins = lifetime.lastWins, lastSeen = os.time()}
+    sessionScore = 0
+    if runStats.startedAt then runStats.score, runStats.wins = 0, 0 saveStats() end
+    saveLifetime()
+    window:Notify({Title = "Totals", Content = "Score and win totals are back to zero.", Type = "Success", Duration = 3})
+end})
+
+-- reads "1,234", "12.5K", "3M" off the leaderboard
+local function parseCount(t)
+    t = tostring(t or ""):gsub(",", ""):gsub("%s", "")
+    local num, suffix = t:match("^([%d%.]+)([KkMmBb]?)$")
+    if not num then return nil end
+    local mult = ({k = 1e3, m = 1e6, b = 1e9})[suffix:lower()] or 1
+    return (tonumber(num) or 0) * mult
+end
+
+local function myBoardRow()
+    local pg = plr:FindFirstChild("PlayerGui")
+    local gg = pg and pg:FindFirstChild("GameGui")
+    local ls = gg and gg:FindFirstChild("Screen") and gg.Screen:FindFirstChild("Leaderstats")
+    local items = ls and ls:FindFirstChild("Inner") and ls.Inner:FindFirstChild("Items")
+    local inner = items and items:FindFirstChild("Inner")
+    local row = inner and inner:FindFirstChild(plr.Name)
+    return row and row:FindFirstChild("Categories")
+end
+
+-- Wins only ever go up, so remember the highest value seen: a leaderboard rebuild that briefly shows 0 and then
+-- the real number can't look like a win. Increases in the first SETTLE seconds after binding are ignored.
+local WIN_SETTLE = 15
+local winQueue = {}
+local winBound, winConn, winLast, winBoundAt
+local winBaseFromSave = false -- true when the baseline came from the file saved before the last hop / execute
+-- wins and score are tracked on every win, with or without the webhook; the webhook message is only an extra
+local function onWinsChanged(lbl)
+    local cur = parseCount(lbl.Text)
+    if not cur then return end
+    if winLast and cur > winLast and (os.clock() - winBoundAt > WIN_SETTLE or winBaseFromSave) then
+        local gained = math.floor(cur - winLast + 0.5)
+        -- the song's score from this server, or the one saved just before we hopped (a win can land mid-hop)
+        local earned = tonumber(live.lastScore) or tonumber(lifetime.lastScore) or 0
+        sessionScore += earned
+        lifetime.score += earned
+        lifetime.wins += gained
+        lifetime.lastScore = nil
+        if runStats.startedAt then
+            runStats.wins = (runStats.wins or 0) + gained
+            runStats.score = sessionScore
+            saveStats()
+        end
+        lifetime.lastWins = cur
+        saveLifetime()
+        if hookCfg.on then
+            local cats = myBoardRow()
+            local streakLbl = cats and cats:FindFirstChild("WinStreak")
+            local payload = winPayload("Win +" .. gained, lbl.Text, streakLbl and streakLbl.Text or "?")
+            if state.OnWin then pcall(state.OnWin, payload) end
+            if validHook(hookCfg.url) or hookCfg.dryRun then table.insert(winQueue, payload) end
+        end
+    end
+    if not winLast or cur > winLast then
+        winLast = cur
+        lifetime.lastWins = cur
+        saveLifetime()
+        winBaseFromSave = false
+    end
+end
+
+task.spawn(function()
+    while alive do
+        local cats = myBoardRow()
+        local lbl = cats and cats:FindFirstChild("Wins")
+        if lbl ~= winBound then -- (re)bind, the game may rebuild the leaderboard rows
+            if winConn then winConn:Disconnect() winConn = nil end
+            winBound = lbl
+            winBoundAt = os.clock()
+            if lbl then
+                -- first bind after a hop / execute: if we saved the win count less than 10 minutes ago, that is our
+                -- baseline, so a win that landed while we were hopping gets counted instead of silently absorbed
+                if not winLast and tonumber(lifetime.lastWins) and os.time() - (tonumber(lifetime.lastSeen) or 0) < 600 then
+                    winLast, winBaseFromSave = lifetime.lastWins, true
+                end
+                local cur = parseCount(lbl.Text)
+                if cur and winBaseFromSave and cur > winLast then
+                    onWinsChanged(lbl) -- counts the gained wins with the saved score
+                elseif cur and (not winLast or cur > winLast) then
+                    winLast = cur
+                end
+                winConn = lbl:GetPropertyChangedSignal("Text"):Connect(function() onWinsChanged(lbl) end)
+            end
+        end
+        -- keep the file fresh: the last in-song score and a heartbeat, so a hop can't lose a win's score
+        if live.lastScore then lifetime.lastScore = live.lastScore end
+        lifetime.lastSeen = os.time()
+        if os.time() - (lifetime.savedAt or 0) >= 6 then
+            lifetime.savedAt = os.time()
+            saveLifetime()
+        end
+        -- send one queued message per tick so a burst can't trip Discord's rate limit
+        if #winQueue > 0 then
+            local code = postHook(hookCfg.url, table.remove(winQueue, 1))
+            if code == 429 then task.wait(3) end
+        end
+        task.wait(2)
+    end
+    if winConn then winConn:Disconnect() end
+end)
+
+-- manager: starts/stops the farm and the accuracy split from the toggle
+local pairRunning, pairToken, pairCleanup, pairSaved = false, 0, nil, nil
+local pairRestartWhy -- set by the farm when a hop is stuck or errored: the manager restarts it (stats are kept)
+local function pairSetStatus(t) pcall(function() pairStatus:Set(t) end) end
+
+local function pairEnd()
+    pairToken += 1
+    pairRunning = false
+    if pairCleanup then pairCleanup() pairCleanup = nil end
+    if pairSaved then
+        for k, v in pairs(pairSaved) do set(k, v) end
+        pairSaved = nil
+    end
+    -- turned off on purpose: the next run starts counting from zero
+    runStats = {}
+    sessionScore = 0
+    pcall(function() if isfile(STATS_FILE) then delfile(STATS_FILE) end end)
+    pcall(function() uptimeLbl:Set("not running") end)
+    pairSetStatus("off")
+end
+
+task.spawn(function()
+    local warned = false
+    while alive do
+        local winner, loser = pairCfg.winner, pairCfg.loser
+        local want = pairCfg.on and winner ~= "" and loser ~= ""
+        local role
+        if want then
+            if plr.Name:lower() == winner:lower() then role = "winner"
+            elseif plr.Name:lower() == loser:lower() then role = "loser" end
+        end
+        if want and not role then
+            if not warned then
+                warned = true
+                pairSetStatus("this account (" .. plr.Name .. ") is neither the winner nor the loser")
+            end
+        elseif want and not pairRunning then
+            warned = false
+            pairRunning = true
+            pairToken += 1
+            local my = pairToken
+            -- (kept across a restart, so "off" still puts back what the player had before the farm took over)
+            pairSaved = pairSaved or {enabled = auto.enabled, aim = auto.aim, aimTarget = auto.aimTarget, humanize = auto.humanize}
+            -- no song list yet (first run): measure every song in the background, the built-in list covers the wait
+            local known = 0
+            for k, v in pairs(pjson(SONG_CACHE) or {}) do if type(v) == "number" then known += 1 end end
+            if known < 500 and not scanning then runScan() end
+            if not runStats.startedAt then -- a fresh run (a hop reload keeps the saved one)
+                runStats = {startedAt = os.time(), wins = 0, score = 0}
+                sessionScore = 0
+            end
+            saveStats()
+            set("enabled", true)
+            set("humanize", false)
+            if role == "winner" then
+                set("aim", false) -- no target = perfect
+            else
+                set("aim", true)
+                set("aimTarget", pairCfg.loserAcc)
+            end
+            local w, l = (role == "winner") and plr.Name or winner, (role == "loser") and plr.Name or loser
+            pairSetStatus("running as the " .. role)
+            task.spawn(function()
+                local okRun, cleanup = pcall(runPairFarm, w, l, function() return alive and pairRunning and pairToken == my end, pairSetStatus,
+                    function(why) if pairToken == my then pairRestartWhy = why end end)
+                if okRun then
+                    if pairToken == my then pairCleanup = cleanup else if cleanup then cleanup() end end
+                else
+                    pairSetStatus("error: " .. tostring(cleanup))
+                end
+            end)
+        elseif pairRunning and pairRestartWhy then
+            -- the farm asked for a fresh start (stuck hop, error, map didn't load): stop this run, the next tick starts a new one
+            local why = pairRestartWhy
+            pairRestartWhy = nil
+            warn("[DUO FARM] restarting the farm: " .. tostring(why))
+            pairToken += 1
+            pairRunning = false
+            if pairCleanup then pcall(pairCleanup) pairCleanup = nil end
+            pairSetStatus("restarting (" .. tostring(why) .. ")")
+        elseif role and pairRunning then
+            -- loser accuracy slider can change while running
+            if role == "loser" then set("aimTarget", pairCfg.loserAcc) end
+        elseif not want and pairRunning then
+            pairEnd()
+        end
+        if pairRunning and runStats.startedAt then
+            pcall(function()
+                uptimeLbl:Set("running for " .. fmtDur(os.time() - runStats.startedAt) .. "  |  wins " .. tostring(runStats.wins or 0)
+                    .. "  |  score " .. commas(sessionScore)
+                    .. (pairCfg.hopOn and ("  |  hop in " .. fmtDur(math.max(0, (tonumber(pairCfg.hopMin) or 0) * 60 - (os.clock() - serverJoinedAt)))) or ""))
+            end)
+            if os.time() - (runStats.lastSeen or 0) >= 20 then saveStats() end -- heartbeat: tells a hop reload this run is alive
+        end
+        task.wait(1)
+    end
+end)
+
+-- ---------- menu layout fix ----------
+-- Switching the layout or arrangement (Panels / Rail / Dock, Columns / Grid ...) sometimes leaves the panels half-sized:
+-- squished, with blurry text and a blank area. The library's own ApplyLayout rebuilds them properly, so run it a moment
+-- after every layout, arrangement, panel-count or window-size change (and not on our own re-layout).
+task.spawn(function()
+    local v = window.v
+    if type(v) ~= "table" or type(v.ApplyLayout) ~= "function" then return end
+    local function sample()
+        local size = v.Pages and v.Pages.AbsoluteSize
+        return tostring(v.LayoutName) .. "|" .. tostring(v.Arrange) .. "|" .. tostring(v.OpenPanels and #v.OpenPanels)
+            .. "|" .. (size and (math.floor(size.X) .. "x" .. math.floor(size.Y)) or "?")
+    end
+    local last, dirtyAt = sample(), nil
+    while alive do
+        task.wait(0.25)
+        local now = sample()
+        if now ~= last then
+            last, dirtyAt = now, os.clock() -- still changing: wait until it settles
+        elseif dirtyAt and os.clock() - dirtyAt > 0.9 then
+            dirtyAt = nil
+            pcall(function() v:ApplyLayout() end)
+            task.wait(0.6)
+            last = sample() -- our own re-layout changed the sizes, don't treat that as a new change
+        end
     end
 end)
 

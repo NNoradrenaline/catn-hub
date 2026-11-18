@@ -1,4 +1,4 @@
--- catn hub v1.14.1
+-- catn hub v1.15.0
 
 local Vanta = (function(...)
 local Players = game:GetService("Players")
@@ -2292,6 +2292,18 @@ end
 
 function Window:_boot(opts)
     self.Booted = true
+    if opts.StartClosed then
+        -- start hidden, no pop-in: the player opens it from the top bar icon or the toggle key
+        self.Open = false
+        self.Root.Visible = false
+        self.Body.GroupTransparency = 1
+        self:_blur(false)
+        self:_dockSync()
+        U.sceneSync()
+        task.defer(function() if not self.Destroyed then pcall(self._catStart, self) end end)
+        if self.Current then self:_movePill(self.Current, true) end
+        return
+    end
     self:_popIn()
     task.defer(function() if not self.Destroyed then pcall(self._catStart, self) end end)
     local function ready()
@@ -4336,6 +4348,12 @@ BPUI.Windows = {}
 
 function BPUI:CreateWindow(o)
     o = o or {}
+    -- a hub can set BPUI.DefaultStartClosed: the windows of the games it loads then start closed,
+    -- unless the game's own script says otherwise
+    if o.StartClosed == nil and type(BPUI.DefaultStartClosed) == "function" then
+        local okClosed, closed = pcall(BPUI.DefaultStartClosed)
+        o.StartClosed = okClosed and closed == true
+    end
     local gone
 
     local version = o.Version or "1.14.1"
@@ -4353,6 +4371,7 @@ function BPUI:CreateWindow(o)
         Size = o.Size,
         Scene = o.Scene,
         Icon = "cat",
+        StartClosed = o.StartClosed == true,
 
         Theme = Vanta.ThemeActive(o.Theme) and o.Theme or nil,
     })
@@ -4534,7 +4553,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.14.1"
+local HUB_VERSION = "1.15.0"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -4582,7 +4601,7 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.1.1",
+        Version = "1.2.0",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
     {
@@ -4629,12 +4648,25 @@ local function lowGraphics(on)
     end
 end
 
+-- "Auto open on start" (Utilities > Session) is read from the saved settings before the window exists,
+-- so the hub can start closed without ever flashing open
+local function savedAutoOpen()
+    local ok, on = pcall(function()
+        if type(isfile) == "function" and isfile("CatnHub/settings.json") then
+            return HttpService:JSONDecode(readfile("CatnHub/settings.json")).auto_open == true
+        end
+        return false
+    end)
+    return ok and on == true
+end
+
 local win = Vanta:Window({
     Title = "Catn Hub",
     Subtitle = "v" .. HUB_VERSION,
     Icon = "cat",
     Key = Enum.KeyCode.RightControl,
     Config = "CatnHub",
+    StartClosed = not savedAutoOpen(),
     OnDestroy = function()
         antiAfk(false)
         lowGraphics(false)
@@ -4693,13 +4725,19 @@ local function run(entry)
 end
 
 local loaded = false
-local function load(entry)
+local function load(entry, automatic)
     if loaded then
         win:Notify({Title = entry.Name, Content = "Already loaded.", Type = "Info"})
         return
     end
     loaded = true
-    if run(entry) then
+    -- pressing Load means "show me the menu": that game's window opens even when Auto open on start is off.
+    -- (A window starts closed one step after it is created, so this has to be decided while the script runs.)
+    local keepDefault = BPUI.DefaultStartClosed
+    if not automatic then BPUI.DefaultStartClosed = function() return false end end
+    local started = run(entry)
+    BPUI.DefaultStartClosed = keepDefault
+    if started then
         win:SetBadge(true)
         win:SetOpen(false)
         win:Notify({Title = entry.Name, Content = "Loaded. Click the Catn icon or press Right Ctrl to open the hub again.", Type = "Success"})
@@ -4846,6 +4884,10 @@ local utils = win:Tab({Name = "Utilities", Icon = "wrench", Desc = "Tools that w
 
 local session = utils:Section("Session")
 session:Toggle({Name = "Anti AFK", Icon = "timer", Desc = "Stops the game kicking you for being idle", Flag = "anti_afk", Callback = antiAfk})
+local autoOpenToggle = session:Toggle({Name = "Auto open on start", Icon = "eye", Default = false, Flag = "auto_open",
+    Desc = "Opens the hub and each game's menu as soon as they load. Off: they start closed and you open them from the Catn icon in the top bar (or the toggle key). Good for autoexec. Takes effect the next time you run the hub."})
+-- every game window the hub loads follows this setting
+BPUI.DefaultStartClosed = function() return not autoOpenToggle:Get() end
 
 local comeBack = {on = true, loader = type(LOADER) == "string" and LOADER or ""}
 local canQueue = type(queue_on_teleport) == "function"
@@ -4938,6 +4980,7 @@ end})
 
 win.CatnApi = {
     load = load, unloadAll = unloadAll, panic = panic, rejoin = rejoin, serverHop = serverHop, debugInfo = debugInfo, antiAfk = antiAfk,
+    autoOpen = function() return autoOpenToggle:Get() end,
     bus = bus,
 }
 
@@ -4982,7 +5025,7 @@ task.spawn(function()
         if auto:Get() then
             win:Notify({Title = found.Name, Content = "Loading automatically. You can turn that off in the Game tab.", Type = "Info", Duration = 4})
             task.delay(1.5, function()
-                if not win.Destroyed then load(found) end
+                if not win.Destroyed then load(found, true) end
             end)
         else
             win:Notify({Title = "Supported", Content = found.Name .. " is ready to load.", Type = "Success"})
