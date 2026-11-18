@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.2.0",
+local window = BPUI:CreateWindow({Version = "1.2.1",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1467,7 +1467,7 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
                         else
                             setStatus("readied up, waiting for the other account")
                         end
-                    elseif os.clock() - lastTried > READY_RETRY and (choosing == true or lastPress == -math.huge) then
+                    elseif os.clock() - lastTried > READY_RETRY and choosing == true then -- only when our row actually shows "Choosing..."; never press blind while the row flickers in/out as both accounts settle on a stage
                         task.wait(1.5) -- let both accounts settle before voting
                         if bothOnSameStage() and stillChoosing(sel) ~= false and not intruder
                             and #strangersOnStage(ourStage()) == 0 then -- checked again right before we vote
