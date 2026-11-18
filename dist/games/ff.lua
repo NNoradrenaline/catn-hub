@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.2.1",
+local window = BPUI:CreateWindow({Version = "1.3.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1672,6 +1672,20 @@ hookSec:AddInput({Name = "Webhook URL", Placeholder = "https://discord.com/api/w
 hookSec:AddToggle({Name = "Notify on every win", Default = false, Flag = "ff_hook_on",
     Callback = function(v) hookCfg.on = v == true end})
 
+-- Control the duo farm from Discord. A webhook can only send, so taking commands needs a bot token
+-- (made in the Developer Portal). You enter it; it is saved in plain text in this script's settings, so
+-- keep that file and the channel private. Run both accounts with the same token and channel.
+local botCfg = {token = "", channel = "", on = false}
+state.BotCfg = botCfg
+hookSec:AddInput({Name = "Bot token (to take commands)", Placeholder = "token from the Developer Portal", Flag = "ff_bot_token",
+    Description = "Lets you type start / stop / status in your channel to control the duo farm. Saved in plain text, so keep the settings file and the channel private.",
+    Callback = function(v) botCfg.token = trimName(v) end})
+hookSec:AddInput({Name = "Command channel ID", Placeholder = "right-click the channel > Copy Channel ID", Flag = "ff_bot_channel",
+    Callback = function(v) botCfg.channel = trimName(v) end})
+hookSec:AddToggle({Name = "Take commands from Discord", Default = false, Flag = "ff_bot_on",
+    Description = "Polls the channel every few seconds for: start, stop, status.",
+    Callback = function(v) botCfg.on = v == true end})
+
 local function validHook(url)
     return type(url) == "string"
         and (url:match("^https://discord%.com/api/webhooks/%d+/[%w_%-]+$") or url:match("^https://discordapp%.com/api/webhooks/%d+/[%w_%-]+$")
@@ -1777,6 +1791,74 @@ hookSec:AddButton({Name = "Reset score and win totals", ButtonText = "Reset", Ca
     saveLifetime()
     window:Notify({Title = "Totals", Content = "Score and win totals are back to zero.", Type = "Success", Duration = 3})
 end})
+
+-- ---------- Discord bot: read commands from the channel and drive the duo farm ----------
+task.spawn(function()
+    local API = "https://discord.com/api/v10"
+    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+    if not req then return end
+    local lastId, seeded, warnedAuth = nil, false, false
+    local function send(text)
+        pcall(req, {Url = API .. "/channels/" .. botCfg.channel .. "/messages", Method = "POST",
+            Headers = {["Content-Type"] = "application/json", ["Authorization"] = "Bot " .. botCfg.token},
+            Body = HttpService:JSONEncode({content = text})})
+    end
+    local function role()
+        local me = plr.Name:lower()
+        if me == (pairCfg.winner or ""):lower() then return "winner" end
+        if me == (pairCfg.loser or ""):lower() then return "loser" end
+        return "neither winner nor loser"
+    end
+    local function apply(cmd)
+        if cmd == "start" or cmd == "on" then
+            pairCfg.on = true
+            pcall(function() state.PairToggle:Set(true) end)
+            send(plr.Name .. ": duo farm ON (" .. role() .. ")")
+        elseif cmd == "stop" or cmd == "off" then
+            pairCfg.on = false
+            pcall(function() state.PairToggle:Set(false) end)
+            send(plr.Name .. ": duo farm OFF")
+        elseif cmd == "status" then
+            if not pairCfg.on then
+                send(plr.Name .. ": duo farm is OFF")
+            elseif runStats.startedAt then
+                send(string.format("%s: ON as %s, running %s, wins %d, score %s", plr.Name, role(),
+                    fmtDur(os.time() - runStats.startedAt), runStats.wins or 0, commas(sessionScore)))
+            else
+                send(plr.Name .. ": ON as " .. role() .. ", starting up")
+            end
+        end
+    end
+    while alive do
+        task.wait(4)
+        if botCfg.on and botCfg.token ~= "" and botCfg.channel:match("^%d+$") then
+            local url = API .. "/channels/" .. botCfg.channel .. "/messages?limit=" .. (lastId and ("10&after=" .. lastId) or "1")
+            local ok, res = pcall(req, {Url = url, Method = "GET", Headers = {["Authorization"] = "Bot " .. botCfg.token}})
+            local status = ok and res and res.StatusCode
+            if (status == 401 or status == 403) and not warnedAuth then
+                warnedAuth = true
+                pcall(function() window:Notify({Title = "Discord bot", Content = "Discord refused the token/permissions (" .. tostring(status) .. "). Check the token and that the bot can read and send in that channel.", Type = "Error", Duration = 6}) end)
+            elseif status == 200 and res.Body then
+                warnedAuth = false
+                local good, msgs = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                if good and type(msgs) == "table" then
+                    -- Discord returns newest first; walk oldest->newest so lastId lands on the newest. The first poll only
+                    -- seeds lastId (skip old chat); later polls act on anything newer than lastId.
+                    for i = #msgs, 1, -1 do
+                        local m = msgs[i]
+                        if type(m) == "table" and m.id then
+                            lastId = m.id
+                            if seeded and not (m.author and m.author.bot) then
+                                apply((tostring(m.content or ""):lower():gsub("^%s*!?%s*", ""):gsub("%s+$", "")))
+                            end
+                        end
+                    end
+                    seeded = true
+                end
+            end
+        end
+    end
+end)
 
 -- reads "1,234", "12.5K", "3M" off the leaderboard
 local function parseCount(t)
