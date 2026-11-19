@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.3.3",
+local window = BPUI:CreateWindow({Version = "1.3.4",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1854,7 +1854,7 @@ task.spawn(function()
         end
     end
     while alive do
-        task.wait(4)
+        task.wait(1.2) -- poll fast so commands feel responsive
         if botCfg.on and botCfg.token ~= "" and botCfg.channel:match("^%d+$") then
             local url = API .. "/channels/" .. botCfg.channel .. "/messages?limit=" .. (lastId and ("10&after=" .. lastId) or "1")
             local ok, res = pcall(req, {Url = url, Method = "GET", Headers = {["Authorization"] = "Bot " .. botCfg.token}})
@@ -1879,6 +1879,8 @@ task.spawn(function()
                     end
                     seeded = true
                 end
+            elseif status == 429 then
+                task.wait(5) -- rate limited: ease off before the next poll
             end
         end
     end
