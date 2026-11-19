@@ -79,7 +79,7 @@ function localAccounts() {
     const lastSeen = Math.max(Number(life.lastSeen) || 0, (runFile && Number(runFile.lastSeen)) || 0);
     out.push({
       name,
-      wins: Number(life.wins) || 0,
+      wins: Number(life.lastWins) || Number(life.wins) || 0, // the real leaderboard win count
       score: Number(life.score) || 0,
       since: Number(life.since) || 0,
       lastSeen,
