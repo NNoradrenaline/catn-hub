@@ -48,6 +48,13 @@ const PRUNE_AGE = 6 * 3600; // drop DB nodes not seen in this long, so the roste
 const COLOR = 0x8f70ec;
 const ZW = "​"; // zero-width spacer for a clean 3-column grid
 const FF_PLACE = 6447798030; // Funky Friday place id (fallback when no live server is known)
+// Roblox reports game names in each player's language ("Viernes funky"…), so the hub's own games get one
+// canonical name, keyed by universe id then place id (same ids the hub uses to detect them).
+const KNOWN_UNIVERSES = { 2404080894: "Funky Friday", 578392296: "Anime Battle Arena", 10765490774: "Climb For Animals Eggs", 3047037061: "bLockerman's Minesweeper" };
+const KNOWN_PLACES = { 6447798030: "Funky Friday", 1458767429: "Anime Battle Arena", 85738654635245: "Climb For Animals Eggs", 7871169780: "bLockerman's Minesweeper", 6520999642: "Basically FNF: Remix" };
+function gameName(d) {
+  return KNOWN_UNIVERSES[Number(d.u)] || KNOWN_PLACES[Number(d.pl)] || (typeof d.g === "string" ? d.g : "");
+}
 
 // One consistent look for every card: branded author (with the bot's own avatar), subtle footer, timestamp.
 function brand(embed, footer) {
@@ -217,7 +224,7 @@ async function firebaseAccounts() {
         run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
         placeId: Number(d.pl) || 0,
         jobId: typeof d.j === "string" ? d.j : "",
-        game: typeof d.g === "string" && d.g ? d.g : Number(d.pl) === FF_PLACE ? "Funky Friday" : "",
+        game: gameName(d),
       };
     }
   } catch (e) {
@@ -727,7 +734,7 @@ if (TEST) {
   module.exports = {
     abbrev, dur, esc, samePeers, accountsEmbed, accountsEmbeds, accountEmbed, topEmbed, statsEmbed, gamesEmbed, joinEmbed,
     statusEmbed, isAdmin, interactionIsAdmin, handleCommand, brand, helpEmbed, findAccount, notFound, editDistance,
-    compareEmbed, cardButtons, joinButtons, mergeAccounts,
+    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName,
   };
 } else {
   client.login(TOKEN).catch((e) => {

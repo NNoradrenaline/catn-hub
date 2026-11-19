@@ -131,5 +131,11 @@ ok(m2[0].jobId === "new" && m2[0].online === true, "merge: fresh beats stale lay
 const m3 = B.mergeAccounts([[acct({ name: "A", wins: 1 }), acct({ name: "B", wins: 9 })]]);
 ok(m3[0].name === "B", "merge sorts by wins desc");
 
+// --- canonical game names (players report localized names) ---
+ok(B.gameName({ u: 2404080894, g: "[Acércate] Viernes funky" }) === "Funky Friday", "canonical by universe");
+ok(B.gameName({ pl: 6520999642, g: "whatever" }) === "Basically FNF: Remix", "canonical by place");
+ok(B.gameName({ u: 1, pl: 2, g: "Slap Battles" }) === "Slap Battles", "unknown game keeps reported name");
+ok(B.gameName({}) === "", "no game -> empty");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
