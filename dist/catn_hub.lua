@@ -4601,7 +4601,7 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.2.0",
+        Version = "1.8.1",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
     {
