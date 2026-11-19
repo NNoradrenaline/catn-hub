@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.5.1",
+local window = BPUI:CreateWindow({Version = "1.5.2",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1823,8 +1823,9 @@ do
         local function body()
             return HttpService:JSONEncode({content = "STAT " .. HttpService:JSONEncode({
                 n = plr.Name,
-                w = tonumber(lifetime.lastWins) or tonumber(lifetime.wins) or 0, -- the real leaderboard win count
-                s = tonumber(lifetime.score) or 0,
+                w = tonumber(lifetime.lastWins) or tonumber(lifetime.wins) or 0, -- real leaderboard win total
+                sw = tonumber(lifetime.wins) or 0, -- wins the script farmed since it started tracking
+                s = tonumber(lifetime.score) or 0, -- points the script earned
                 rw = runStats.startedAt and (runStats.wins or 0) or nil,
                 rs = runStats.startedAt and sessionScore or nil,
                 rt = runStats.startedAt or nil,

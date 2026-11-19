@@ -79,13 +79,14 @@ function localAccounts() {
     const lastSeen = Math.max(Number(life.lastSeen) || 0, (runFile && Number(runFile.lastSeen)) || 0);
     out.push({
       name,
-      wins: Number(life.lastWins) || Number(life.wins) || 0, // the real leaderboard win count
-      score: Number(life.score) || 0,
+      wins: Number(life.lastWins) || Number(life.wins) || 0, // real leaderboard win total
+      scriptWins: Number(life.wins) || 0, // wins the script farmed
+      scriptPoints: Number(life.score) || 0, // points the script earned
       since: Number(life.since) || 0,
       lastSeen,
       online: now - lastSeen < ONLINE_LOCAL,
       run: runFile && runFile.startedAt
-        ? { wins: Number(runFile.wins) || 0, score: Number(runFile.score) || 0, startedAt: Number(runFile.startedAt) || 0 }
+        ? { wins: Number(runFile.wins) || 0, points: Number(runFile.score) || 0, startedAt: Number(runFile.startedAt) || 0 }
         : null,
     });
   }
@@ -136,12 +137,13 @@ async function remoteAccounts() {
     if (out[d.n] && out[d.n].lastSeen >= t) continue;
     out[d.n] = {
       name: d.n,
-      wins: Number(d.w) || 0,
-      score: Number(d.s) || 0,
+      wins: Number(d.w) || 0, // real leaderboard win total
+      scriptWins: Number(d.sw) || 0, // wins farmed by the script
+      scriptPoints: Number(d.s) || 0, // points earned by the script
       since: 0,
       lastSeen: t,
       online: now - t < ONLINE_REMOTE,
-      run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
+      run: d.rt ? { wins: Number(d.rw) || 0, points: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
     };
   }
   return out;
@@ -189,8 +191,9 @@ function accountsEmbed(accts) {
   const now = Math.floor(Date.now() / 1000);
   const embed = new EmbedBuilder().setTitle("Farm accounts").setColor(COLOR);
   for (const a of accts.slice(0, 25)) {
-    let v = `${a.online ? "🟢 online" : "⚪ offline"} · lifetime **${a.wins}** wins · **${abbrev(a.score)}** score`;
-    if (a.online && a.run) v += `\nthis run: ${a.run.wins} wins · ${abbrev(a.run.score)} · ${dur(now - a.run.startedAt)}`;
+    let v = `${a.online ? "🟢 online" : "⚪ offline"} · total wins **${a.wins}**`;
+    v += `\nwith the script: ${a.scriptWins} wins · ${abbrev(a.scriptPoints)} points`;
+    if (a.online && a.run) v += `\nthis run: ${a.run.wins} wins · ${abbrev(a.run.points)} pts · ${dur(now - a.run.startedAt)}`;
     embed.addFields({ name: a.name, value: v });
   }
   const online = accts.filter((a) => a.online).length;
@@ -210,13 +213,17 @@ function accountEmbed(accts, query) {
     .setColor(a.online ? 0x57f287 : 0x747f8d)
     .addFields(
       { name: "Status", value: a.online ? "🟢 farming" : "⚪ offline", inline: true },
-      { name: "Lifetime wins", value: String(a.wins), inline: true },
-      { name: "Lifetime score", value: abbrev(a.score), inline: true }
+      { name: "Total wins", value: String(a.wins), inline: true },
+      { name: "​", value: "​", inline: true },
+      { name: "Wins (script)", value: String(a.scriptWins), inline: true },
+      { name: "Points (script)", value: abbrev(a.scriptPoints), inline: true },
+      { name: "​", value: "​", inline: true }
     );
   if (a.run)
     embed.addFields(
-      { name: "This run", value: `${a.run.wins} wins · ${abbrev(a.run.score)} score`, inline: true },
-      { name: "Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true }
+      { name: "This run", value: `${a.run.wins} wins · ${abbrev(a.run.points)} pts`, inline: true },
+      { name: "Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true },
+      { name: "​", value: "​", inline: true }
     );
   if (a.since) embed.addFields({ name: "Tracking since", value: `<t:${a.since}:D>`, inline: true });
   if (a.lastSeen) embed.addFields({ name: "Last seen", value: `<t:${a.lastSeen}:R>`, inline: true });
@@ -225,7 +232,8 @@ function accountEmbed(accts, query) {
 
 function statsEmbed(accts) {
   const tw = accts.reduce((s, a) => s + a.wins, 0);
-  const ts = accts.reduce((s, a) => s + a.score, 0);
+  const tsw = accts.reduce((s, a) => s + a.scriptWins, 0);
+  const tsp = accts.reduce((s, a) => s + a.scriptPoints, 0);
   const online = accts.filter((a) => a.online).length;
   return new EmbedBuilder()
     .setTitle("Farm totals")
@@ -233,7 +241,9 @@ function statsEmbed(accts) {
     .addFields(
       { name: "Accounts", value: `${accts.length} (${online} online)`, inline: true },
       { name: "Total wins", value: String(tw), inline: true },
-      { name: "Total score", value: abbrev(ts), inline: true }
+      { name: "​", value: "​", inline: true },
+      { name: "Script wins", value: String(tsw), inline: true },
+      { name: "Script points", value: abbrev(tsp), inline: true }
     );
 }
 
