@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.6.0",
+local window = BPUI:CreateWindow({Version = "1.7.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1857,6 +1857,8 @@ do
                 rw = runStats.startedAt and (runStats.wins or 0) or nil,
                 rs = runStats.startedAt and sessionScore or nil,
                 rt = runStats.startedAt or nil,
+                pl = game.PlaceId, -- so the bot can hand out a "join this server" script
+                j = game.JobId,
                 t = os.time(),
             })})
         end

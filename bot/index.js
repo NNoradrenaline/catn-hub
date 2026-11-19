@@ -6,6 +6,7 @@
 // Commands (an optional "catn" or "!" prefix works):
 //   accounts / online   - list accounts (all, or only the ones farming now)
 //   account <name>      - detailed stats for one account
+//   join <name>         - copy-paste script to join that account's server
 //   top                 - leaderboard by wins
 //   stats               - totals across all accounts
 //   help / hi / meow
@@ -28,6 +29,15 @@ const ONLINE_LOCAL = 45;
 const ONLINE_REMOTE = 200;
 const COLOR = 0x8f70ec;
 const ZW = "​"; // zero-width spacer for a clean 3-column grid
+const FF_PLACE = 6447798030; // Funky Friday place id (fallback when no live server is known)
+
+// One consistent look for every card: author line, subtle footer, timestamp.
+function brand(embed, footer) {
+  return embed
+    .setAuthor({ name: "Catn Yapper" })
+    .setFooter({ text: footer ? footer + " · Catn Hub" : "Catn Hub" })
+    .setTimestamp();
+}
 
 function readJson(p) {
   try {
@@ -145,6 +155,8 @@ async function remoteAccounts() {
       lastSeen: t,
       online: now - t < ONLINE_REMOTE,
       run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
+      placeId: Number(d.pl) || 0,
+      jobId: typeof d.j === "string" ? d.j : "",
     };
   }
   return out;
@@ -155,28 +167,37 @@ async function allAccounts() {
   const byName = {};
   const remote = await remoteAccounts();
   for (const a of Object.values(remote)) byName[a.name.toLowerCase()] = a;
-  for (const a of localAccounts()) byName[a.name.toLowerCase()] = a;
+  // Local files are fresher for stats, but keep the live placeId/jobId the channel reported.
+  for (const a of localAccounts()) {
+    const k = a.name.toLowerCase();
+    byName[k] = byName[k] ? { ...byName[k], ...a } : a;
+  }
   return Object.values(byName).sort((a, b) => b.wins - a.wins);
 }
 
-const HELP = new EmbedBuilder()
-  .setTitle("Catn Yapper — commands")
-  .setColor(COLOR)
-  .setDescription(
-    [
-      "A panel over the Funky Friday farm. An optional `catn` or `!` prefix works on everything.",
-      "",
-      "📋 **`accounts`** — list every account with wins, points & status",
-      "🟢 **`online`** — only the accounts farming right now",
-      "🔎 **`account <name>`** — full stats for one account",
-      "🏆 **`top`** — leaderboard by wins",
-      "📊 **`stats`** — grand totals across everyone",
-      "",
-      "🐱 **`meow`** — a random cat gif · **`hi`** — I say bye",
-      "",
-      "_Control the farm (`start`/`stop`/`rejoin`) from Discord with the Roblox hub running._",
-    ].join("\n")
-  );
+const HELP = brand(
+  new EmbedBuilder()
+    .setTitle("🎧 Catn Yapper")
+    .setColor(COLOR)
+    .setDescription("Your panel over the Funky Friday farm. Prefix with `catn ` or `!` if you like — both optional.")
+    .addFields(
+      {
+        name: "📊 Stats",
+        value: [
+          "**`accounts`** — every account: wins, points & status",
+          "**`online`** — only the ones farming right now",
+          "**`account <name>`** — full stats for one account",
+          "**`top`** — leaderboard by wins",
+          "**`stats`** — grand totals across everyone",
+        ].join("\n"),
+      },
+      {
+        name: "🔗 Jump in",
+        value: "**`join <name>`** — a copy-paste script that drops you into that account's server",
+      },
+      { name: "🐱 Fun", value: "**`meow`** — a random cat gif · **`hi`** — I say bye" }
+    )
+);
 
 async function catGif() {
   try {
@@ -192,18 +213,17 @@ async function catGif() {
 function accountsEmbed(accts, title) {
   if (!accts.length) return null;
   const now = Math.floor(Date.now() / 1000);
-  const embed = new EmbedBuilder().setTitle(title || "Farm accounts").setColor(COLOR);
+  const embed = new EmbedBuilder().setTitle("🎧 " + (title || "Funky Friday farm")).setColor(COLOR);
   for (const a of accts.slice(0, 25)) {
     let v = `${a.online ? "🟢 online" : "⚪ offline"} · **${a.wins}** wins · **${abbrev(a.points)}** pts · ${abbrev(a.totalScore)} score`;
-    v += `\nscript: ${a.scriptWins} wins · ${abbrev(a.scriptScore)}`;
-    if (a.online && a.run) v += ` · run ${a.run.wins}w ${dur(now - a.run.startedAt)}`;
-    embed.addFields({ name: a.name, value: v });
+    v += `\n╰ script farmed: ${a.scriptWins} wins · ${abbrev(a.scriptScore)}`;
+    if (a.online && a.run) v += ` · this run ${a.run.wins}w (${dur(now - a.run.startedAt)})`;
+    embed.addFields({ name: "▸ " + a.name, value: v });
   }
   const online = accts.filter((a) => a.online).length;
-  let footer = `${accts.length} account(s) · ${online} online`;
+  let footer = `${accts.length} account${accts.length === 1 ? "" : "s"} · ${online} online`;
   if (accts.length > 25) footer += " · showing 25";
-  embed.setFooter({ text: footer });
-  return embed;
+  return brand(embed, footer);
 }
 
 function accountEmbed(accts, query) {
@@ -212,49 +232,78 @@ function accountEmbed(accts, query) {
   if (!a) return null;
   const now = Math.floor(Date.now() / 1000);
   const embed = new EmbedBuilder()
-    .setTitle(a.name)
+    .setTitle((a.online ? "🟢 " : "⚪ ") + a.name)
     .setColor(a.online ? 0x57f287 : 0x747f8d)
     .addFields(
-      { name: "Status", value: a.online ? "🟢 farming" : "⚪ offline", inline: true },
-      { name: "Wins", value: String(a.wins), inline: true },
-      { name: "Points", value: abbrev(a.points), inline: true },
-      { name: "Total score", value: abbrev(a.totalScore), inline: true },
-      { name: "Farmed by script", value: `${a.scriptWins} wins · ${abbrev(a.scriptScore)}`, inline: true },
+      { name: "🏆 Wins", value: String(a.wins), inline: true },
+      { name: "💰 Points", value: abbrev(a.points), inline: true },
+      { name: "📈 Total score", value: abbrev(a.totalScore), inline: true },
+      { name: "🤖 Farmed by script", value: `${a.scriptWins} wins · ${abbrev(a.scriptScore)}`, inline: true },
+      { name: ZW, value: ZW, inline: true },
       { name: ZW, value: ZW, inline: true }
     );
   if (a.run)
     embed.addFields(
-      { name: "This run", value: `${a.run.wins} wins · ${abbrev(a.run.score)}`, inline: true },
-      { name: "Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true },
+      { name: "▶️ This run", value: `${a.run.wins} wins · ${abbrev(a.run.score)}`, inline: true },
+      { name: "⏱️ Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true },
       { name: ZW, value: ZW, inline: true }
     );
-  if (a.lastSeen) embed.addFields({ name: "Last seen", value: `<t:${a.lastSeen}:R>`, inline: true });
-  if (a.since) embed.addFields({ name: "Tracking since", value: `<t:${a.since}:D>`, inline: true });
-  return embed;
+  const meta = [];
+  if (a.lastSeen) meta.push(`Last seen <t:${a.lastSeen}:R>`);
+  if (a.since) meta.push(`tracking since <t:${a.since}:D>`);
+  if (meta.length) embed.addFields({ name: ZW, value: meta.join(" · ") });
+  embed.addFields({ name: "🔗 Join", value: `\`join ${a.name}\`` });
+  return brand(embed, a.online ? "farming now" : "offline");
 }
 
 function topEmbed(accts) {
   if (!accts.length) return null;
   const top = [...accts].sort((a, b) => b.wins - a.wins).slice(0, 10);
   const medal = ["🥇", "🥈", "🥉"];
-  const lines = top.map((a, i) => `${medal[i] || `**${i + 1}.**`} ${a.name} — **${a.wins}** wins · ${abbrev(a.points)} pts ${a.online ? "🟢" : ""}`);
-  return new EmbedBuilder().setTitle("🏆 Top accounts by wins").setColor(0xffd166).setDescription(lines.join("\n"));
+  const lines = top.map((a, i) => `${medal[i] || `\`${i + 1}.\``} **${a.name}** — ${a.wins} wins · ${abbrev(a.points)} pts ${a.online ? "🟢" : ""}`);
+  return brand(new EmbedBuilder().setTitle("🏆 Top accounts by wins").setColor(0xffd166).setDescription(lines.join("\n")));
 }
 
 function statsEmbed(accts) {
   const sum = (k) => accts.reduce((s, a) => s + (a[k] || 0), 0);
   const online = accts.filter((a) => a.online).length;
-  return new EmbedBuilder()
-    .setTitle("📊 Farm totals")
-    .setColor(COLOR)
-    .addFields(
-      { name: "Accounts", value: `${accts.length} (${online} online)`, inline: true },
-      { name: "Total wins", value: String(sum("wins")), inline: true },
-      { name: "Total points", value: abbrev(sum("points")), inline: true },
-      { name: "Total score", value: abbrev(sum("totalScore")), inline: true },
-      { name: "Farmed by scripts", value: `${sum("scriptWins")} wins · ${abbrev(sum("scriptScore"))}`, inline: true },
-      { name: ZW, value: ZW, inline: true }
-    );
+  return brand(
+    new EmbedBuilder()
+      .setTitle("📊 Farm totals")
+      .setColor(COLOR)
+      .addFields(
+        { name: "👥 Accounts", value: `${accts.length} (${online} online)`, inline: true },
+        { name: "🏆 Total wins", value: String(sum("wins")), inline: true },
+        { name: "💰 Total points", value: abbrev(sum("points")), inline: true },
+        { name: "📈 Total score", value: abbrev(sum("totalScore")), inline: true },
+        { name: "🤖 Farmed by scripts", value: `${sum("scriptWins")} wins · ${abbrev(sum("scriptScore"))}`, inline: true },
+        { name: ZW, value: ZW, inline: true }
+      )
+  );
+}
+
+// A copy-paste executor script that teleports you into this account's live server.
+function joinEmbed(accts, query) {
+  const q = query.toLowerCase();
+  const a = accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q));
+  if (!a) return null;
+  const place = a.placeId || FF_PLACE;
+  let script, note;
+  if (a.jobId) {
+    script = `game:GetService("TeleportService"):TeleportToPlaceInstance(${place}, "${a.jobId}")`;
+    note = a.online
+      ? "Paste this in your executor to drop into **this account's exact server**."
+      : "⚠️ This account looks offline — that server has probably ended, so this may fail.";
+  } else {
+    script = `game:GetService("TeleportService"):Teleport(${place})`;
+    note = "No live server is known for this account, so this joins **any** Funky Friday server.";
+  }
+  return brand(
+    new EmbedBuilder()
+      .setTitle("🔗 Join " + a.name)
+      .setColor(a.online ? 0x57f287 : COLOR)
+      .setDescription(`${note}\n\`\`\`lua\n${script}\n\`\`\``)
+  );
 }
 
 const client = new Client({
@@ -280,6 +329,10 @@ client.on(Events.MessageCreate, async (msg) => {
     } else if (word === "account" || word === "acc") {
       if (!rest) return void (await msg.channel.send("Usage: `account <name>`"));
       const e = accountEmbed(await allAccounts(), rest);
+      await msg.channel.send(e ? { embeds: [e] } : `No account matching "${rest}".`);
+    } else if (word === "join") {
+      if (!rest) return void (await msg.channel.send("Usage: `join <name>`"));
+      const e = joinEmbed(await allAccounts(), rest);
       await msg.channel.send(e ? { embeds: [e] } : `No account matching "${rest}".`);
     } else if (word === "top" || word === "leaderboard" || word === "lb") {
       const e = topEmbed(await allAccounts());
