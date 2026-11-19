@@ -96,6 +96,8 @@ function localAccounts() {
       since: Number(life.since) || 0,
       lastSeen,
       online: now - lastSeen < ONLINE_LOCAL,
+      placeId: Number(msg.pl) || 0,
+      jobId: typeof msg.j === "string" ? msg.j : "",
       run: runFile && runFile.startedAt
         ? { wins: Number(runFile.wins) || 0, score: Number(runFile.score) || 0, startedAt: Number(runFile.startedAt) || 0 }
         : null,
@@ -122,18 +124,26 @@ async function remoteAccounts() {
   const out = {};
   const ch = await getStatsChannelId();
   if (!ch) return out;
-  let msgs;
+  // Edited messages keep their old position, so an account's STAT can sit far back. Page through
+  // several hundred so long-running accounts don't fall out of view.
+  const msgs = [];
+  let before = "";
   try {
-    const res = await fetch(`https://discord.com/api/v10/channels/${ch}/messages?limit=100`, {
-      headers: { Authorization: "Bot " + TOKEN },
-    });
-    if (!res.ok) return out;
-    msgs = await res.json();
+    for (let page = 0; page < 5; page++) {
+      const url = `https://discord.com/api/v10/channels/${ch}/messages?limit=100` + (before ? "&before=" + before : "");
+      const res = await fetch(url, { headers: { Authorization: "Bot " + TOKEN } });
+      if (!res.ok) break;
+      const batch = await res.json();
+      if (!Array.isArray(batch) || !batch.length) break;
+      msgs.push(...batch);
+      before = batch[batch.length - 1].id;
+      if (batch.length < 100) break;
+    }
   } catch (e) {
-    return out;
+    if (!msgs.length) return out;
   }
   const now = Math.floor(Date.now() / 1000);
-  for (const m of Array.isArray(msgs) ? msgs : []) {
+  for (const m of msgs) {
     const c = (m && m.content) || "";
     if (!c.startsWith("STAT ")) continue;
     let d;
