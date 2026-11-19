@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.4.0",
+local window = BPUI:CreateWindow({Version = "1.4.1",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1818,16 +1818,28 @@ if botReq then
     local req = botReq
     local gatewayUp = false
     local pollLastId, pollSeeded, warnedAuth = nil, false, false
-    local function send(text)
-        pcall(req, {Url = API .. "/channels/" .. botCfg.channel .. "/messages", Method = "POST",
+    local function sendTo(channelId, text)
+        pcall(req, {Url = API .. "/channels/" .. tostring(channelId) .. "/messages", Method = "POST",
             Headers = {["Content-Type"] = "application/json", ["Authorization"] = "Bot " .. botCfg.token},
             Body = HttpService:JSONEncode({content = text})})
     end
+    -- Both accounts run the bot, so only one of them should answer (the winner, or either if none is set);
+    -- both still ACT on a command, only the reply is deduped.
+    local function primary() return tostring(pairCfg.winner or "") == "" or plr.Name:lower() == tostring(pairCfg.winner):lower() end
+    local function send(text) if primary() then sendTo(botCfg.channel, text) end end
     local function role()
         local me = plr.Name:lower()
         if me == (pairCfg.winner or ""):lower() then return "winner" end
         if me == (pairCfg.loser or ""):lower() then return "loser" end
         return "neither winner nor loser"
+    end
+    -- General chatter the bot answers in whatever channel it was said (add more word -> reply pairs here).
+    local GENERAL = {hi = "bye"}
+    local function respond(channelId, content)
+        if not (channelId and primary()) then return end
+        local word = tostring(content or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        local reply = GENERAL[word]
+        if reply then sendTo(channelId, reply) end
     end
     local HELP = "duo farm commands (a leading 'catn' or '!' is optional): start, stop, status, stats, rejoin, help"
     local function apply(raw)
@@ -1906,10 +1918,9 @@ if botReq then
                                 pcall(function() sock:Close() end)
                             elseif op == 0 then
                                 if p.t == "READY" then gatewayUp = true; fails = 0 end
-                                if p.t == "MESSAGE_CREATE" and type(p.d) == "table"
-                                    and tostring(p.d.channel_id) == botCfg.channel
-                                    and not (p.d.author and p.d.author.bot) then
-                                    apply(p.d.content)
+                                if p.t == "MESSAGE_CREATE" and type(p.d) == "table" and not (p.d.author and p.d.author.bot) then
+                                    respond(p.d.channel_id, p.d.content) -- general replies (hi -> bye), any channel the bot sees
+                                    if tostring(p.d.channel_id) == botCfg.channel then apply(p.d.content) end -- farm commands only in the command channel
                                 end
                             end
                         end)
@@ -1950,6 +1961,7 @@ if botReq then
                                 if type(m) == "table" and m.id then
                                     pollLastId = m.id
                                     if pollSeeded and not (m.author and m.author.bot) then
+                                        respond(botCfg.channel, m.content) -- general replies (polling only sees the command channel)
                                         apply(m.content)
                                     end
                                 end
