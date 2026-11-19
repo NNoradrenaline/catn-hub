@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.5.2",
+local window = BPUI:CreateWindow({Version = "1.6.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1670,14 +1670,18 @@ end})
 
 -- ---------- Discord webhook: one message per win ----------
 local hookSec = pairTab:CreateSection("Discord webhook")
-local hookCfg = {url = "", on = false}
+local hookCfg = {url = "", on = false, everyWins = 1}
 state.WebhookCfg = hookCfg
 hookSec:AddInput({Name = "Webhook URL (optional)", Placeholder = "https://discord.com/api/webhooks/...", Flag = "ff_hook_url",
     Description = "Only needed if you're NOT using the bot below. If the bot is set up, wins post through it instead. Saved in plain text, so don't share the settings file.",
     Callback = function(v) hookCfg.url = trimName(v) end})
-hookSec:AddToggle({Name = "Notify on every win", Default = false, Flag = "ff_hook_on",
-    Description = "Posts each win to your channel, through the bot when it's set up, otherwise the webhook.",
+hookSec:AddToggle({Name = "Notify on wins", Default = false, Flag = "ff_hook_on",
+    Description = "Posts wins to your channel, through the bot when it's set up, otherwise the webhook.",
     Callback = function(v) hookCfg.on = v == true end})
+local EVERY = {["Every win"] = 1, ["Every 5 wins"] = 5, ["Every 10 wins"] = 10, ["Every 25 wins"] = 25, ["Every 50 wins"] = 50, ["Every 100 wins"] = 100}
+hookSec:AddDropdown({Name = "How often", Options = {"Every win", "Every 5 wins", "Every 10 wins", "Every 25 wins", "Every 50 wins", "Every 100 wins"}, Default = "Every win", Flag = "ff_hook_every",
+    Description = "Only send a win message this often, so the channel isn't spammed on fast farms.",
+    Callback = function(v) hookCfg.everyWins = EVERY[tostring(v)] or 1 end})
 
 -- Control the duo farm from Discord. A webhook can only send, so taking commands needs a bot token
 -- (made in the Developer Portal). You enter it; it is saved in plain text in this script's settings, so
@@ -1819,13 +1823,37 @@ do
     local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
     if req and STATS_WEBHOOK ~= "" then
         local MSG_FILE = PAIR_FOLDER .. "/statmsg_" .. plr.Name .. ".json"
-        local msgId = (pjson(MSG_FILE) or {}).id
+        local saved = pjson(MSG_FILE) or {}
+        local msgId = saved.id
+        local function num(t) -- "3.13k" / "105m" / "1,234" -> a number
+            t = tostring(t or ""):gsub(",", ""):gsub("%s", "")
+            local n, suf = t:match("^([%d%.]+)([KkMmBb]?)$")
+            if not n then return nil end
+            return (tonumber(n) or 0) * (({k = 1e3, m = 1e6, b = 1e9})[suf:lower()] or 1)
+        end
+        local function board(name) -- the real leaderboard value, or nil if the board isn't up yet
+            local pg = plr:FindFirstChild("PlayerGui")
+            local gg = pg and pg:FindFirstChild("GameGui")
+            local lb = gg and gg:FindFirstChild("Screen") and gg.Screen:FindFirstChild("Leaderstats")
+            local items = lb and lb:FindFirstChild("Inner") and lb.Inner:FindFirstChild("Items")
+            local row = items and items:FindFirstChild("Inner") and items.Inner:FindFirstChild(plr.Name)
+            local cats = row and row:FindFirstChild("Categories")
+            local lbl = cats and cats:FindFirstChild(name)
+            return lbl and num(lbl.Text) or nil
+        end
+        -- remember the last real values, so a tick where the board is mid-rebuild doesn't drop them to 0
+        local realW, realP, realTS = tonumber(saved.w), tonumber(saved.p), tonumber(saved.ts)
         local function body()
+            realW = board("Wins") or realW or tonumber(lifetime.lastWins) or 0
+            realP = board("Points") or realP or 0
+            realTS = board("TotalScore") or realTS or 0
             return HttpService:JSONEncode({content = "STAT " .. HttpService:JSONEncode({
                 n = plr.Name,
-                w = tonumber(lifetime.lastWins) or tonumber(lifetime.wins) or 0, -- real leaderboard win total
-                sw = tonumber(lifetime.wins) or 0, -- wins the script farmed since it started tracking
-                s = tonumber(lifetime.score) or 0, -- points the script earned
+                w = math.floor(realW), -- real leaderboard wins
+                p = math.floor(realP), -- real points (the game's Points currency)
+                ts = math.floor(realTS), -- real total score
+                sw = tonumber(lifetime.wins) or 0, -- wins the script farmed
+                s = tonumber(lifetime.score) or 0, -- score the script farmed
                 rw = runStats.startedAt and (runStats.wins or 0) or nil,
                 rs = runStats.startedAt and sessionScore or nil,
                 rt = runStats.startedAt or nil,
@@ -1834,20 +1862,22 @@ do
         end
         task.spawn(function()
             while alive do
+                local payload = body()
                 local sent = false
                 if msgId then
                     local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "/messages/" .. msgId, Method = "PATCH",
-                        Headers = {["Content-Type"] = "application/json"}, Body = body()})
+                        Headers = {["Content-Type"] = "application/json"}, Body = payload})
                     sent = ok and res and tonumber(res.StatusCode) ~= nil and res.StatusCode < 300
                 end
                 if not sent then -- no message yet, or it was deleted: post a fresh one and remember its id
                     local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "?wait=true", Method = "POST",
-                        Headers = {["Content-Type"] = "application/json"}, Body = body()})
+                        Headers = {["Content-Type"] = "application/json"}, Body = payload})
                     if ok and res and res.Body then
                         local good, m = pcall(function() return HttpService:JSONDecode(res.Body) end)
-                        if good and type(m) == "table" and m.id then msgId = m.id; pwrite(MSG_FILE, {id = m.id}) end
+                        if good and type(m) == "table" and m.id then msgId = m.id end
                     end
                 end
+                pwrite(MSG_FILE, {id = msgId, w = realW, p = realP, ts = realTS}) -- keep the last real values on disk
                 task.wait(120)
             end
         end)
@@ -2035,6 +2065,7 @@ local winQueue = {}
 local winBound, winConn, winLast, winBoundAt
 local winBaseFromSave = false -- true when the baseline came from the file saved before the last hop / execute
 -- wins and score are tracked on every win, with or without the webhook; the webhook message is only an extra
+local notifiedAtWins = nil -- win count at our last notification, for the "how often" throttle
 local function onWinsChanged(lbl)
     local cur = parseCount(lbl.Text)
     if not cur then return end
@@ -2054,11 +2085,17 @@ local function onWinsChanged(lbl)
         lifetime.lastWins = cur
         saveLifetime()
         if hookCfg.on then
-            local cats = myBoardRow()
-            local streakLbl = cats and cats:FindFirstChild("WinStreak")
-            local payload = winPayload("Win +" .. gained, lbl.Text, streakLbl and streakLbl.Text or "?")
-            if state.OnWin then pcall(state.OnWin, payload) end
-            if botReady() or validHook(hookCfg.url) or hookCfg.dryRun then table.insert(winQueue, payload) end
+            local every = math.max(1, tonumber(hookCfg.everyWins) or 1)
+            notifiedAtWins = notifiedAtWins or (cur - gained) -- baseline: the win count before this change
+            if cur - notifiedAtWins >= every then
+                local gainedSince = cur - notifiedAtWins
+                notifiedAtWins = cur
+                local cats = myBoardRow()
+                local streakLbl = cats and cats:FindFirstChild("WinStreak")
+                local payload = winPayload("Win +" .. gainedSince, lbl.Text, streakLbl and streakLbl.Text or "?")
+                if state.OnWin then pcall(state.OnWin, payload) end
+                if botReady() or validHook(hookCfg.url) or hookCfg.dryRun then table.insert(winQueue, payload) end
+            end
         end
     end
     if not winLast or cur > winLast then

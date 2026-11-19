@@ -4,12 +4,11 @@
 // channel (via STATS_WEBHOOK, no bot token needed), and this bot reads that channel + the local files.
 //
 // Commands (an optional "catn" or "!" prefix works):
-//   accounts            - list every account (everyone's) with online status + lifetime/run stats
+//   accounts / online   - list accounts (all, or only the ones farming now)
 //   account <name>      - detailed stats for one account
+//   top                 - leaderboard by wins
 //   stats               - totals across all accounts
 //   help / hi / meow
-//
-// Farm CONTROL (start/stop/rejoin) stays in the Roblox script and only works while an account is in-game.
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
@@ -22,15 +21,13 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// Shared stats channel every hub posts to. Same webhook URL that's baked into the hub script.
 const STATS_WEBHOOK = (process.env.STATS_WEBHOOK || "").trim();
-// Local files this PC's own hub writes (a fresher source for this machine's accounts).
 const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
 const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "workspace", "FFAutoFarm");
-
-const ONLINE_LOCAL = 45; // local file touched within N seconds = online
-const ONLINE_REMOTE = 200; // remote stat posted within N seconds = online (hubs post every ~120s)
+const ONLINE_LOCAL = 45;
+const ONLINE_REMOTE = 200;
 const COLOR = 0x8f70ec;
+const ZW = "​"; // zero-width spacer for a clean 3-column grid
 
 function readJson(p) {
   try {
@@ -60,7 +57,7 @@ function dur(sec) {
   return `${sec}s`;
 }
 
-// This PC's accounts, from the local FFAutoFarm files.
+// This PC's accounts, from the local FFAutoFarm files (lifetime_, stats_, statmsg_ which holds the real board values).
 function localAccounts() {
   let files;
   try {
@@ -76,24 +73,26 @@ function localAccounts() {
     const name = m[1];
     const life = readJson(path.join(FARM_DIR, f)) || {};
     const runFile = readJson(path.join(FARM_DIR, `stats_${name}.json`));
+    const msg = readJson(path.join(FARM_DIR, `statmsg_${name}.json`)) || {};
     const lastSeen = Math.max(Number(life.lastSeen) || 0, (runFile && Number(runFile.lastSeen)) || 0);
     out.push({
       name,
-      wins: Number(life.lastWins) || Number(life.wins) || 0, // real leaderboard win total
-      scriptWins: Number(life.wins) || 0, // wins the script farmed
-      scriptPoints: Number(life.score) || 0, // points the script earned
+      wins: Number(msg.w) || Number(life.lastWins) || Number(life.wins) || 0, // real leaderboard wins
+      points: Number(msg.p) || 0, // real Points currency
+      totalScore: Number(msg.ts) || 0, // real total score
+      scriptWins: Number(life.wins) || 0, // wins farmed by the script
+      scriptScore: Number(life.score) || 0, // score farmed by the script
       since: Number(life.since) || 0,
       lastSeen,
       online: now - lastSeen < ONLINE_LOCAL,
       run: runFile && runFile.startedAt
-        ? { wins: Number(runFile.wins) || 0, points: Number(runFile.score) || 0, startedAt: Number(runFile.startedAt) || 0 }
+        ? { wins: Number(runFile.wins) || 0, score: Number(runFile.score) || 0, startedAt: Number(runFile.startedAt) || 0 }
         : null,
     });
   }
   return out;
 }
 
-// Resolve the stats channel id from the webhook once, then cache it.
 let statsChannelId = null;
 async function getStatsChannelId() {
   if (statsChannelId || !STATS_WEBHOOK) return statsChannelId;
@@ -102,7 +101,7 @@ async function getStatsChannelId() {
     const d = await res.json();
     if (d && d.channel_id) statsChannelId = String(d.channel_id);
   } catch (e) {
-    /* ignore; we'll retry next call */
+    /* retry next call */
   }
   return statsChannelId;
 }
@@ -137,19 +136,21 @@ async function remoteAccounts() {
     if (out[d.n] && out[d.n].lastSeen >= t) continue;
     out[d.n] = {
       name: d.n,
-      wins: Number(d.w) || 0, // real leaderboard win total
-      scriptWins: Number(d.sw) || 0, // wins farmed by the script
-      scriptPoints: Number(d.s) || 0, // points earned by the script
+      wins: Number(d.w) || 0,
+      points: Number(d.p) || 0,
+      totalScore: Number(d.ts) || 0,
+      scriptWins: Number(d.sw) || 0,
+      scriptScore: Number(d.s) || 0,
       since: 0,
       lastSeen: t,
       online: now - t < ONLINE_REMOTE,
-      run: d.rt ? { wins: Number(d.rw) || 0, points: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
+      run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
     };
   }
   return out;
 }
 
-// All accounts everywhere: remote (shared channel), with this PC's local files layered on top (fresher).
+// All accounts everywhere: remote (shared channel) with this PC's local files layered on top (fresher).
 async function allAccounts() {
   const byName = {};
   const remote = await remoteAccounts();
@@ -159,19 +160,21 @@ async function allAccounts() {
 }
 
 const HELP = new EmbedBuilder()
-  .setTitle("Catn Yapper")
+  .setTitle("Catn Yapper — commands")
   .setColor(COLOR)
   .setDescription(
     [
-      "**Farm panel (everyone's accounts)**",
-      "`accounts` - every account with online status + stats",
-      "`account <name>` - detailed stats for one account",
-      "`stats` - totals across all accounts",
+      "A panel over the Funky Friday farm. An optional `catn` or `!` prefix works on everything.",
       "",
-      "**Other**",
-      "`hi` - I say bye · `meow` - a random cat gif · `help` - this",
+      "📋 **`accounts`** — list every account with wins, points & status",
+      "🟢 **`online`** — only the accounts farming right now",
+      "🔎 **`account <name>`** — full stats for one account",
+      "🏆 **`top`** — leaderboard by wins",
+      "📊 **`stats`** — grand totals across everyone",
       "",
-      "Control the farm (`start`/`stop`/`status`/`rejoin`) from Discord with the Roblox hub running - those live in the script.",
+      "🐱 **`meow`** — a random cat gif · **`hi`** — I say bye",
+      "",
+      "_Control the farm (`start`/`stop`/`rejoin`) from Discord with the Roblox hub running._",
     ].join("\n")
   );
 
@@ -186,19 +189,19 @@ async function catGif() {
   return "https://cataas.com/cat/gif?" + Date.now();
 }
 
-function accountsEmbed(accts) {
+function accountsEmbed(accts, title) {
   if (!accts.length) return null;
   const now = Math.floor(Date.now() / 1000);
-  const embed = new EmbedBuilder().setTitle("Farm accounts").setColor(COLOR);
+  const embed = new EmbedBuilder().setTitle(title || "Farm accounts").setColor(COLOR);
   for (const a of accts.slice(0, 25)) {
-    let v = `${a.online ? "🟢 online" : "⚪ offline"} · total wins **${a.wins}**`;
-    v += `\nwith the script: ${a.scriptWins} wins · ${abbrev(a.scriptPoints)} points`;
-    if (a.online && a.run) v += `\nthis run: ${a.run.wins} wins · ${abbrev(a.run.points)} pts · ${dur(now - a.run.startedAt)}`;
+    let v = `${a.online ? "🟢 online" : "⚪ offline"} · **${a.wins}** wins · **${abbrev(a.points)}** pts · ${abbrev(a.totalScore)} score`;
+    v += `\nscript: ${a.scriptWins} wins · ${abbrev(a.scriptScore)}`;
+    if (a.online && a.run) v += ` · run ${a.run.wins}w ${dur(now - a.run.startedAt)}`;
     embed.addFields({ name: a.name, value: v });
   }
   const online = accts.filter((a) => a.online).length;
   let footer = `${accts.length} account(s) · ${online} online`;
-  if (accts.length > 25) footer += " · showing top 25 by wins";
+  if (accts.length > 25) footer += " · showing 25";
   embed.setFooter({ text: footer });
   return embed;
 }
@@ -213,37 +216,44 @@ function accountEmbed(accts, query) {
     .setColor(a.online ? 0x57f287 : 0x747f8d)
     .addFields(
       { name: "Status", value: a.online ? "🟢 farming" : "⚪ offline", inline: true },
-      { name: "Total wins", value: String(a.wins), inline: true },
-      { name: "​", value: "​", inline: true },
-      { name: "Wins (script)", value: String(a.scriptWins), inline: true },
-      { name: "Points (script)", value: abbrev(a.scriptPoints), inline: true },
-      { name: "​", value: "​", inline: true }
+      { name: "Wins", value: String(a.wins), inline: true },
+      { name: "Points", value: abbrev(a.points), inline: true },
+      { name: "Total score", value: abbrev(a.totalScore), inline: true },
+      { name: "Farmed by script", value: `${a.scriptWins} wins · ${abbrev(a.scriptScore)}`, inline: true },
+      { name: ZW, value: ZW, inline: true }
     );
   if (a.run)
     embed.addFields(
-      { name: "This run", value: `${a.run.wins} wins · ${abbrev(a.run.points)} pts`, inline: true },
+      { name: "This run", value: `${a.run.wins} wins · ${abbrev(a.run.score)}`, inline: true },
       { name: "Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true },
-      { name: "​", value: "​", inline: true }
+      { name: ZW, value: ZW, inline: true }
     );
-  if (a.since) embed.addFields({ name: "Tracking since", value: `<t:${a.since}:D>`, inline: true });
   if (a.lastSeen) embed.addFields({ name: "Last seen", value: `<t:${a.lastSeen}:R>`, inline: true });
+  if (a.since) embed.addFields({ name: "Tracking since", value: `<t:${a.since}:D>`, inline: true });
   return embed;
 }
 
+function topEmbed(accts) {
+  if (!accts.length) return null;
+  const top = [...accts].sort((a, b) => b.wins - a.wins).slice(0, 10);
+  const medal = ["🥇", "🥈", "🥉"];
+  const lines = top.map((a, i) => `${medal[i] || `**${i + 1}.**`} ${a.name} — **${a.wins}** wins · ${abbrev(a.points)} pts ${a.online ? "🟢" : ""}`);
+  return new EmbedBuilder().setTitle("🏆 Top accounts by wins").setColor(0xffd166).setDescription(lines.join("\n"));
+}
+
 function statsEmbed(accts) {
-  const tw = accts.reduce((s, a) => s + a.wins, 0);
-  const tsw = accts.reduce((s, a) => s + a.scriptWins, 0);
-  const tsp = accts.reduce((s, a) => s + a.scriptPoints, 0);
+  const sum = (k) => accts.reduce((s, a) => s + (a[k] || 0), 0);
   const online = accts.filter((a) => a.online).length;
   return new EmbedBuilder()
-    .setTitle("Farm totals")
+    .setTitle("📊 Farm totals")
     .setColor(COLOR)
     .addFields(
       { name: "Accounts", value: `${accts.length} (${online} online)`, inline: true },
-      { name: "Total wins", value: String(tw), inline: true },
-      { name: "​", value: "​", inline: true },
-      { name: "Script wins", value: String(tsw), inline: true },
-      { name: "Script points", value: abbrev(tsp), inline: true }
+      { name: "Total wins", value: String(sum("wins")), inline: true },
+      { name: "Total points", value: abbrev(sum("points")), inline: true },
+      { name: "Total score", value: abbrev(sum("totalScore")), inline: true },
+      { name: "Farmed by scripts", value: `${sum("scriptWins")} wins · ${abbrev(sum("scriptScore"))}`, inline: true },
+      { name: ZW, value: ZW, inline: true }
     );
 }
 
@@ -252,7 +262,7 @@ const client = new Client({
 });
 
 client.once(Events.ClientReady, (c) =>
-  console.log("online as " + c.user.tag + " | stats channel: " + (STATS_WEBHOOK ? "shared" : "local only") + " | farm dir: " + FARM_DIR)
+  console.log("online as " + c.user.tag + " | stats: " + (STATS_WEBHOOK ? "shared" : "local only") + " | farm dir: " + FARM_DIR)
 );
 
 client.on(Events.MessageCreate, async (msg) => {
@@ -264,10 +274,16 @@ client.on(Events.MessageCreate, async (msg) => {
     if (word === "accounts" || word === "list") {
       const e = accountsEmbed(await allAccounts());
       await msg.channel.send(e ? { embeds: [e] } : "No farm accounts reported yet.");
+    } else if (word === "online") {
+      const e = accountsEmbed((await allAccounts()).filter((a) => a.online), "Accounts farming now");
+      await msg.channel.send(e ? { embeds: [e] } : "No accounts are farming right now.");
     } else if (word === "account" || word === "acc") {
       if (!rest) return void (await msg.channel.send("Usage: `account <name>`"));
       const e = accountEmbed(await allAccounts(), rest);
       await msg.channel.send(e ? { embeds: [e] } : `No account matching "${rest}".`);
+    } else if (word === "top" || word === "leaderboard" || word === "lb") {
+      const e = topEmbed(await allAccounts());
+      await msg.channel.send(e ? { embeds: [e] } : "No accounts reported yet.");
     } else if (word === "stats" || word === "totals") {
       await msg.channel.send({ embeds: [statsEmbed(await allAccounts())] });
     } else if (word === "help" || word === "commands" || word === "?") {
