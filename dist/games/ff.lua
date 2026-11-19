@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.1",
+local window = BPUI:CreateWindow({Version = "1.8.2",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1846,6 +1846,18 @@ do
         end
         -- remember the last real values, so a tick where the board is mid-rebuild doesn't drop them to 0
         local realW, realP, realTS = tonumber(saved.w), tonumber(saved.p), tonumber(saved.ts)
+        -- "" unless this client is genuinely still connected: a kicked/disconnected client keeps its old JobId
+        local function liveJob()
+            local ok, live = pcall(function()
+                if not plr.Parent then return false end
+                local nc = game:FindService("NetworkClient")
+                if nc and not nc:FindFirstChild("ClientReplicator") then return false end
+                local pg = game:GetService("CoreGui"):FindFirstChild("RobloxPromptGui")
+                local ov = pg and pg:FindFirstChild("promptOverlay")
+                return not (ov and ov:FindFirstChild("ErrorPrompt"))
+            end)
+            return (not ok or live) and game.JobId or ""
+        end
         local function statData()
             realW = board("Wins") or realW or tonumber(lifetime.lastWins) or 0
             realP = board("Points") or realP or 0
@@ -1861,7 +1873,7 @@ do
                 rs = runStats.startedAt and sessionScore or nil,
                 rt = runStats.startedAt or nil,
                 pl = game.PlaceId, -- so the bot can hand out a "join this server" script
-                j = game.JobId,
+                j = liveJob(), -- verified: empty if kicked/disconnected
                 t = os.time(),
             }
         end
@@ -1890,7 +1902,7 @@ do
                     end
                 end
                 -- keep the last real values + the live server on disk, so the bot can join local accounts even offline
-                pwrite(MSG_FILE, {id = msgId, w = realW, p = realP, ts = realTS, j = game.JobId, pl = game.PlaceId})
+                pwrite(MSG_FILE, {id = msgId, w = realW, p = realP, ts = realTS, j = liveJob(), pl = game.PlaceId})
                 task.wait(45) -- refresh often so the server id the bot hands out stays current across hops
             end
         end)

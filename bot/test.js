@@ -34,7 +34,7 @@ ok(hasField(je, /One-click/) && hasField(je, /gameInstanceId=job-123/), "join on
 
 // --- join: stale (online but old) ---
 const stale = acct({ name: "Old", placeId: 1, jobId: "jj", lastSeen: now - 600 });
-ok(/hopped since/.test(desc(B.joinEmbed([stale], "old"))), "join stale warns");
+ok(/hopped or left since/.test(desc(B.joinEmbed([stale], "old"))), "join stale warns");
 
 // --- join: offline with place ---
 const off = acct({ name: "Off", placeId: 55, jobId: "", online: false, lastSeen: now - 99999 });
@@ -136,6 +136,24 @@ ok(B.gameName({ u: 2404080894, g: "[Acércate] Viernes funky" }) === "Funky Frid
 ok(B.gameName({ pl: 6520999642, g: "whatever" }) === "Basically FNF: Remix", "canonical by place");
 ok(B.gameName({ u: 1, pl: 2, g: "Slap Battles" }) === "Slap Battles", "unknown game keeps reported name");
 ok(B.gameName({}) === "", "no game -> empty");
+
+// --- verified presence: only hand out a server the hub actually confirmed ---
+const ver = acct({ name: "Ver", placeId: 9, jobId: "live-1", presence: "in", lastSeen: now - 10 });
+ok(B.verdict(ver) === "verified", "verdict verified");
+ok(/Verified in this server/.test(desc(B.joinEmbed([ver], "ver"))) && /live-1/.test(desc(B.joinEmbed([ver], "ver"))), "join verified gives script");
+const oldCheck = acct({ name: "Oldc", placeId: 9, jobId: "live-2", presence: "in", lastSeen: now - 70 });
+ok(B.verdict(oldCheck) === "stale", "verified check too old -> stale");
+const hop = acct({ name: "Hop", placeId: 9, jobId: "old-job", presence: "hopping", lastSeen: now - 3 });
+ok(B.verdict(hop) === "hopping", "verdict hopping");
+const hopE = B.joinEmbed([hop], "hop");
+ok(/switching servers/.test(desc(hopE)) && !/old-job/.test(desc(hopE)) && !hasField(hopE, /One-click/), "hopping: no stale server handed out");
+const gone = acct({ name: "Gone", placeId: 9, jobId: "", presence: "left", online: false, lastSeen: now - 5 });
+ok(B.verdict(gone) === "left", "verdict left");
+ok(/left or got disconnected/.test(desc(B.joinEmbed([gone], "gone"))) && !hasField(B.joinEmbed([gone], "gone"), /One-click/), "left: no server link");
+ok(B.verdict(acct({ name: "Leg2", jobId: "x", lastSeen: now - 10 })) === "reported", "older hub -> reported");
+const buddy = acct({ name: "Buddy", placeId: 9, jobId: "live-1", presence: "hopping", lastSeen: now - 2 });
+ok(!B.samePeers([ver, buddy], ver).includes("Buddy"), "hopping account not listed as in the same server");
+ok(hasField(B.accountEmbed([ver], "ver"), /Server[\s\S]*verified/), "card shows verified state");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

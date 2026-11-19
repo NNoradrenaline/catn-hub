@@ -44,6 +44,7 @@ const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "worksp
 const ONLINE_LOCAL = 60;
 const ONLINE_REMOTE = 150; // ~3 missed 45s refreshes
 const JOIN_FRESH = 75; // a server id newer than this is current; older may have hopped
+const VERIFIED_FRESH = 50; // hubs re-verify every 20s; a check older than this is no longer proof
 const PRUNE_AGE = 6 * 3600; // drop DB nodes not seen in this long, so the roster stays real
 const COLOR = 0x8f70ec;
 const ZW = "​"; // zero-width spacer for a clean 3-column grid
@@ -220,10 +221,11 @@ async function firebaseAccounts() {
         scriptScore: Number(d.s) || 0,
         since: 0,
         lastSeen: t,
-        online: now - t < ONLINE_REMOTE,
+        online: now - t < ONLINE_REMOTE && d.st !== "left",
         run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
         placeId: Number(d.pl) || 0,
         jobId: typeof d.j === "string" ? d.j : "",
+        presence: typeof d.st === "string" ? d.st : "", // "in" (verified) / "hopping" / "left"; "" = older hub
         game: gameName(d),
       };
     }
@@ -312,7 +314,7 @@ function accountsEmbed(accts, title) {
   const now = Math.floor(Date.now() / 1000);
   const embed = new EmbedBuilder().setTitle("🎧 " + (title || "Hub accounts")).setColor(COLOR);
   for (const a of accts.slice(0, 25)) {
-    let v = `${a.online ? "🟢 online" : "⚪ offline"} · **${a.wins}** wins · **${abbrev(a.points)}** pts · ${abbrev(a.totalScore)} score`;
+    let v = `${VERDICT_LABEL[verdict(a)]} · **${a.wins}** wins · **${abbrev(a.points)}** pts · ${abbrev(a.totalScore)} score`;
     if (a.game) v += ` · 🎮 ${esc(a.game)}`;
     v += `\n╰ script farmed: ${a.scriptWins} wins · ${abbrev(a.scriptScore)}`;
     if (a.online && a.run) v += ` · this run ${a.run.wins}w (${dur(now - a.run.startedAt)})`;
@@ -345,7 +347,8 @@ function accountEmbed(accts, query) {
       { name: "⏱️ Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true },
       { name: ZW, value: ZW, inline: true }
     );
-  if (a.game) embed.addFields({ name: "🎮 Game", value: esc(a.game), inline: false });
+  embed.addFields({ name: "📡 Server", value: VERDICT_LABEL[verdict(a)], inline: true });
+  if (a.game) embed.addFields({ name: "🎮 Game", value: esc(a.game), inline: true });
   const meta = [];
   if (a.lastSeen) meta.push(`Last seen <t:${a.lastSeen}:R>`);
   if (a.since) meta.push(`tracking since <t:${a.since}:D>`);
@@ -355,6 +358,28 @@ function accountEmbed(accts, query) {
   embed.addFields({ name: "🔗 Join", value: `\`join ${a.name}\`` });
   return brand(embed, a.online ? "online" : "offline");
 }
+
+// How much we trust an account's reported server:
+//   verified: its hub confirmed it's connected to that server within the last ~50s
+//   reported: an older hub (no check) reported it recently     stale: last confirmation is too old
+//   hopping:  teleport in progress     left: kicked / disconnected     offline: not around
+function verdict(a) {
+  const age = a.lastSeen ? Math.floor(Date.now() / 1000) - a.lastSeen : Infinity;
+  if (a.presence === "left") return "left";
+  if (!a.online) return "offline";
+  if (a.presence === "hopping") return "hopping";
+  if (!a.jobId) return "offline";
+  if (a.presence === "in") return age <= VERIFIED_FRESH ? "verified" : "stale";
+  return age <= JOIN_FRESH ? "reported" : "stale";
+}
+const VERDICT_LABEL = {
+  verified: "✅ verified in server",
+  reported: "🟢 online (unverified)",
+  stale: "⚠️ server unconfirmed",
+  hopping: "🔄 switching servers",
+  left: "❌ left / disconnected",
+  offline: "⚪ offline",
+};
 
 // Exact name first, then a substring match.
 function findAccount(accts, query) {
@@ -419,7 +444,8 @@ function joinButtons(name) {
 
 // Online accounts sitting in the same server instance as `a` (handy for duo/group joins).
 function samePeers(accts, a) {
-  return accts.filter((x) => x.online && x.jobId && x.jobId === a.jobId && x.name.toLowerCase() !== a.name.toLowerCase()).map((x) => x.name);
+  const here = (x) => verdict(x) === "verified" || verdict(x) === "reported";
+  return accts.filter((x) => here(x) && x.jobId === a.jobId && x.name.toLowerCase() !== a.name.toLowerCase()).map((x) => x.name);
 }
 
 // Active accounts grouped by the game they're in.
@@ -540,14 +566,24 @@ function joinEmbed(accts, query) {
   const a = findAccount(accts, query);
   if (!a) return null;
   const where = a.game ? `**${esc(a.game)}**` : "their game";
-  const age = a.lastSeen ? Math.floor(Date.now() / 1000) - a.lastSeen : Infinity;
-  let script, note;
-  if (a.jobId && a.online) {
-    script = `game:GetService("TeleportService"):TeleportToPlaceInstance(${a.placeId || FF_PLACE}, "${a.jobId}")`;
-    note =
-      age <= JOIN_FRESH
-        ? `Paste this in your executor to drop into this account's server in ${where} (as of <t:${a.lastSeen}:R>).`
-        : `⚠️ This was the server <t:${a.lastSeen}:R> — the account may have **hopped since**. If it fails, run \`join ${a.name}\` again in a few seconds for the fresh server.`;
+  const v = verdict(a);
+  const instance = `game:GetService("TeleportService"):TeleportToPlaceInstance(${a.placeId || FF_PLACE}, "${a.jobId}")`;
+  let script = null,
+    note;
+  if (v === "hopping") {
+    note = `🔄 **${esc(a.name)} is switching servers right now.** Hit **Refresh server** in a few seconds to get the new one.`;
+  } else if (v === "verified") {
+    script = instance;
+    note = `✅ **Verified in this server** <t:${a.lastSeen}:R> (the hub re-checks every 20s). Paste this in your executor to drop into ${where}.`;
+  } else if (v === "reported") {
+    script = instance;
+    note = `This is the server the account last reported <t:${a.lastSeen}:R>. Its hub is an older version that can't confirm it's still there, so this may fail.`;
+  } else if (v === "stale") {
+    script = instance;
+    note = `⚠️ This server was last confirmed <t:${a.lastSeen}:R> — the account may have **hopped or left since**. Hit **Refresh server** to check again.`;
+  } else if (v === "left") {
+    script = `game:GetService("TeleportService"):Teleport(${a.placeId || FF_PLACE})`;
+    note = `❌ **${esc(a.name)} left or got disconnected**, so there's no server to join. This joins ${where} on any server instead.`;
   } else if (a.placeId) {
     script = `game:GetService("TeleportService"):Teleport(${a.placeId})`;
     note = `This account **isn't online right now**, so there's no live server. This joins ${where} on any server instead.`;
@@ -557,14 +593,14 @@ function joinEmbed(accts, query) {
   }
   const embed = new EmbedBuilder()
     .setTitle("🔗 Join " + esc(a.name))
-    .setColor(a.online ? 0x57f287 : COLOR)
-    .setDescription(`${note}\n\`\`\`lua\n${script}\n\`\`\``);
-  if (a.jobId && a.placeId)
+    .setColor(v === "verified" ? 0x57f287 : v === "left" ? 0xed4245 : v === "hopping" || v === "stale" ? 0xfee75c : COLOR)
+    .setDescription(script ? `${note}\n\`\`\`lua\n${script}\n\`\`\`` : note);
+  if ((v === "verified" || v === "reported" || v === "stale") && a.placeId)
     embed.addFields({
       name: "▶ One-click",
       value: `[Launch Roblox into this server](https://www.roblox.com/games/start?placeId=${a.placeId}&gameInstanceId=${a.jobId})`,
     });
-  const peers = a.jobId && a.online ? samePeers(accts, a) : [];
+  const peers = v === "verified" || v === "reported" ? samePeers(accts, a) : [];
   if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 Also here", value: peers.map(esc).join(", ").slice(0, 1000) });
   return brand(embed, a.game || (a.online ? "online" : "offline"));
 }
@@ -615,7 +651,7 @@ async function handleCommand(word, rest) {
     }
     case "join": {
       if (!rest) return "Usage: `join <name>`";
-      const accts = await allAccounts();
+      const accts = await allAccounts(true); // never hand out a cached server
       const a = findAccount(accts, rest);
       if (!a) return notFound(accts, rest);
       return { embeds: [joinEmbed(accts, a.name)], components: [joinButtons(a.name)] };
@@ -734,7 +770,7 @@ if (TEST) {
   module.exports = {
     abbrev, dur, esc, samePeers, accountsEmbed, accountsEmbeds, accountEmbed, topEmbed, statsEmbed, gamesEmbed, joinEmbed,
     statusEmbed, isAdmin, interactionIsAdmin, handleCommand, brand, helpEmbed, findAccount, notFound, editDistance,
-    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName,
+    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict,
   };
 } else {
   client.login(TOKEN).catch((e) => {

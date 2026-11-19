@@ -4553,7 +4553,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.16.0"
+local HUB_VERSION = "1.16.1"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -4601,7 +4601,7 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.8.1",
+        Version = "1.8.2",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
     {
@@ -5079,7 +5079,8 @@ if not hubOk then
     warn("[catn hub] failed to start: " .. tostring(hubRes))
 end
 
--- Universal presence: every hub user, in any game, writes their live server so the bot can join them.
+-- Universal presence: every hub user, in any game, reports the server they're REALLY in, so the bot can join them.
+-- st = "in" (verified connected to j), "hopping" (teleport started), "left" (kicked / disconnected / leaving).
 -- PATCH merges this account's node, so a game script (e.g. Funky Friday) can add richer stats on top.
 do
     local DB = "https://catn-db-default-rtdb.firebaseio.com/"
@@ -5088,26 +5089,63 @@ do
     local env = (getgenv and getgenv()) or _G
     local token = {}
     env.__catnPresence = token
+    -- true only while this client is genuinely connected to its server
+    local function connected(me)
+        if not me or not me.Parent then return false end
+        local ok, live = pcall(function()
+            local nc = game:FindService("NetworkClient")
+            if nc and not nc:FindFirstChild("ClientReplicator") then return false end
+            local pg = game:GetService("CoreGui"):FindFirstChild("RobloxPromptGui")
+            local ov = pg and pg:FindFirstChild("promptOverlay")
+            if ov and ov:FindFirstChild("ErrorPrompt") then return false end -- "Disconnected" / kick screen
+            return true
+        end)
+        return not ok or live -- if the checks themselves error, don't wrongly report "left"
+    end
     if req and DB ~= "" then
         task.spawn(function()
-            local me = game:GetService("Players").LocalPlayer
+            local Players = game:GetService("Players")
+            local me = Players.LocalPlayer
             while not me do
                 task.wait()
-                me = game:GetService("Players").LocalPlayer
+                me = Players.LocalPlayer
             end
             local HttpService = game:GetService("HttpService")
             local gname
             pcall(function()
-                local info = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
-                gname = info and info.Name
+                gname = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
             end)
             local url = DB .. "accounts/" .. me.Name .. ".json"
-            while env.__catnPresence == token do
+            local hopping = false
+            local function push(state)
+                local live = state == "in"
                 local body = HttpService:JSONEncode({
-                    n = me.Name, pl = game.PlaceId, j = game.JobId, u = game.GameId, g = gname, t = os.time(),
+                    n = me.Name, pl = game.PlaceId, j = live and game.JobId or "", st = state,
+                    u = game.GameId, g = gname, t = os.time(), v = os.time(),
                 })
                 pcall(req, {Url = url, Method = "PATCH", Headers = {["Content-Type"] = "application/json"}, Body = body})
-                task.wait(45)
+            end
+            pcall(function()
+                me.OnTeleport:Connect(function(st)
+                    if env.__catnPresence ~= token then return end
+                    if st == Enum.TeleportState.Started or st == Enum.TeleportState.InProgress then
+                        if not hopping then
+                            hopping = true
+                            push("hopping")
+                        end
+                    elseif st == Enum.TeleportState.Failed then
+                        hopping = false
+                        push("in")
+                    end
+                end)
+            end)
+            local last
+            while env.__catnPresence == token do
+                local state = hopping and "hopping" or (connected(me) and "in" or "left")
+                push(state)
+                if state == "left" and last == "left" then break end -- reported twice; nothing more to say
+                last = state
+                task.wait(20)
             end
         end)
     end
