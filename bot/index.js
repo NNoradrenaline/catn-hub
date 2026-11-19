@@ -6,7 +6,8 @@
 // Commands (an optional "catn" or "!" prefix works):
 //   accounts / online   - list accounts (all, or only the ones farming now)
 //   account <name>      - detailed stats for one account
-//   join <name>         - copy-paste script to join that account's server
+//   join <name>         - copy-paste script + one-click link to join that account's live server (any game)
+//   games / search <g>  - who's online grouped by game / accounts in a given game
 //   top                 - leaderboard by wins
 //   stats               - totals across all accounts
 //   help / hi / meow
@@ -29,6 +30,7 @@ const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "worksp
 const ONLINE_LOCAL = 60;
 const ONLINE_REMOTE = 150; // ~3 missed 45s refreshes
 const JOIN_FRESH = 75; // a server id newer than this is current; older may have hopped
+const PRUNE_AGE = 6 * 3600; // drop DB nodes not seen in this long, so the roster stays real
 const COLOR = 0x8f70ec;
 const ZW = "​"; // zero-width spacer for a clean 3-column grid
 const FF_PLACE = 6447798030; // Funky Friday place id (fallback when no live server is known)
@@ -233,16 +235,18 @@ const HELP = brand(
       {
         name: "📊 Stats",
         value: [
-          "**`accounts`** — every account: wins, points & status",
-          "**`online`** — only the ones farming right now",
+          "**`accounts`** — every account: wins, points, game & status",
+          "**`online`** — only the ones online right now",
           "**`account <name>`** — full stats for one account",
+          "**`games`** — who's online, grouped by game",
+          "**`search <game>`** — accounts in a given game",
           "**`top`** — leaderboard by wins",
           "**`stats`** — grand totals across everyone",
         ].join("\n"),
       },
       {
         name: "🔗 Jump in",
-        value: "**`join <name>`** — a copy-paste script that drops you into that account's server",
+        value: "**`join <name>`** — a copy-paste script **and a one-click link** into that account's live server, in any game",
       },
       { name: "🐱 Fun", value: "**`meow`** — a random cat gif · **`hi`** — I say bye" }
     )
@@ -265,6 +269,7 @@ function accountsEmbed(accts, title) {
   const embed = new EmbedBuilder().setTitle("🎧 " + (title || "Funky Friday farm")).setColor(COLOR);
   for (const a of accts.slice(0, 25)) {
     let v = `${a.online ? "🟢 online" : "⚪ offline"} · **${a.wins}** wins · **${abbrev(a.points)}** pts · ${abbrev(a.totalScore)} score`;
+    if (a.game) v += ` · 🎮 ${a.game}`;
     v += `\n╰ script farmed: ${a.scriptWins} wins · ${abbrev(a.scriptScore)}`;
     if (a.online && a.run) v += ` · this run ${a.run.wins}w (${dur(now - a.run.startedAt)})`;
     embed.addFields({ name: "▸ " + a.name, value: v });
@@ -302,8 +307,49 @@ function accountEmbed(accts, query) {
   if (a.lastSeen) meta.push(`Last seen <t:${a.lastSeen}:R>`);
   if (a.since) meta.push(`tracking since <t:${a.since}:D>`);
   if (meta.length) embed.addFields({ name: ZW, value: meta.join(" · ") });
+  const peers = a.online && a.jobId ? samePeers(accts, a) : [];
+  if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 In the same server", value: peers.join(", "), inline: false });
   embed.addFields({ name: "🔗 Join", value: `\`join ${a.name}\`` });
-  return brand(embed, a.online ? "farming now" : "offline");
+  return brand(embed, a.online ? "online" : "offline");
+}
+
+// Online accounts sitting in the same server instance as `a` (handy for duo/group joins).
+function samePeers(accts, a) {
+  return accts.filter((x) => x.online && x.jobId && x.jobId === a.jobId && x.name.toLowerCase() !== a.name.toLowerCase()).map((x) => x.name);
+}
+
+// Active accounts grouped by the game they're in.
+function gamesEmbed(accts) {
+  const online = accts.filter((a) => a.online);
+  if (!online.length) return null;
+  const by = {};
+  for (const a of online) {
+    const g = a.game || "Unknown game";
+    (by[g] = by[g] || []).push(a.name);
+  }
+  const lines = Object.entries(by)
+    .sort((x, y) => y[1].length - x[1].length)
+    .map(([g, names]) => `🎮 **${g}** — ${names.length}\n${names.slice(0, 15).join(", ")}${names.length > 15 ? ` +${names.length - 15} more` : ""}`);
+  return brand(new EmbedBuilder().setTitle("🎮 Active games").setColor(COLOR).setDescription(lines.join("\n\n")));
+}
+
+// Remove accounts not seen in a while, so lists and totals reflect who's actually around.
+async function pruneStale() {
+  if (!FIREBASE) return;
+  try {
+    const res = await fetch(FIREBASE + "/accounts.json");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || typeof data !== "object") return;
+    const cutoff = Math.floor(Date.now() / 1000) - PRUNE_AGE;
+    for (const [key, d] of Object.entries(data)) {
+      if (!d || (Number(d.t) || 0) < cutoff) {
+        await fetch(FIREBASE + "/accounts/" + encodeURIComponent(key) + ".json", { method: "DELETE" });
+      }
+    }
+  } catch (e) {
+    /* ignore */
+  }
 }
 
 function topEmbed(accts) {
@@ -353,21 +399,31 @@ function joinEmbed(accts, query) {
     script = `game:GetService("TeleportService"):Teleport(${FF_PLACE})`;
     note = "This account hasn't reported a game yet (it needs the updated hub). This joins any Funky Friday server for now.";
   }
-  return brand(
-    new EmbedBuilder()
-      .setTitle("🔗 Join " + a.name)
-      .setColor(a.online ? 0x57f287 : COLOR)
-      .setDescription(`${note}\n\`\`\`lua\n${script}\n\`\`\``)
-  );
+  const embed = new EmbedBuilder()
+    .setTitle("🔗 Join " + a.name)
+    .setColor(a.online ? 0x57f287 : COLOR)
+    .setDescription(`${note}\n\`\`\`lua\n${script}\n\`\`\``);
+  if (a.jobId && a.placeId)
+    embed.addFields({
+      name: "▶ One-click",
+      value: `[Launch Roblox into this server](https://www.roblox.com/games/start?placeId=${a.placeId}&gameInstanceId=${a.jobId})`,
+    });
+  const peers = a.jobId && a.online ? samePeers(accts, a) : [];
+  if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 Also here", value: peers.join(", ") });
+  return brand(embed, a.game || (a.online ? "online" : "offline"));
 }
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-client.once(Events.ClientReady, (c) =>
-  console.log("online as " + c.user.tag + " | db: " + (FIREBASE ? "firebase" : STATS_WEBHOOK ? "channel" : "local only") + " | farm dir: " + FARM_DIR)
-);
+client.once(Events.ClientReady, (c) => {
+  console.log("online as " + c.user.tag + " | db: " + (FIREBASE ? "firebase" : STATS_WEBHOOK ? "channel" : "local only") + " | farm dir: " + FARM_DIR);
+  if (FIREBASE) {
+    pruneStale();
+    setInterval(pruneStale, 30 * 60 * 1000); // keep the roster tidy
+  }
+});
 
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot) return;
@@ -379,8 +435,16 @@ client.on(Events.MessageCreate, async (msg) => {
       const e = accountsEmbed(await allAccounts());
       await msg.channel.send(e ? { embeds: [e] } : "No farm accounts reported yet.");
     } else if (word === "online") {
-      const e = accountsEmbed((await allAccounts()).filter((a) => a.online), "Accounts farming now");
-      await msg.channel.send(e ? { embeds: [e] } : "No accounts are farming right now.");
+      const e = accountsEmbed((await allAccounts()).filter((a) => a.online), "Accounts online now");
+      await msg.channel.send(e ? { embeds: [e] } : "No accounts are online right now.");
+    } else if (word === "games") {
+      const e = gamesEmbed(await allAccounts());
+      await msg.channel.send(e ? { embeds: [e] } : "No accounts are online right now.");
+    } else if (word === "search" || word === "find") {
+      if (!rest) return void (await msg.channel.send("Usage: `search <game name>`"));
+      const hits = (await allAccounts()).filter((a) => (a.game || "").toLowerCase().includes(rest));
+      const e = accountsEmbed(hits, `Accounts in "${rest}"`);
+      await msg.channel.send(e ? { embeds: [e] } : `No accounts in a game matching "${rest}".`);
     } else if (word === "account" || word === "acc") {
       if (!rest) return void (await msg.channel.send("Usage: `account <name>`"));
       const e = accountEmbed(await allAccounts(), rest);
