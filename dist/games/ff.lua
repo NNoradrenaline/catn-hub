@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.3.1",
+local window = BPUI:CreateWindow({Version = "1.3.2",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1822,8 +1822,16 @@ task.spawn(function()
         if me == (pairCfg.loser or ""):lower() then return "loser" end
         return "neither winner nor loser"
     end
-    local function apply(cmd)
-        if cmd == "start" or cmd == "on" then
+    -- one account answers help (both would send the same list); the winner, or either if none is set
+    local function amLeader() return tostring(pairCfg.winner or "") == "" or plr.Name:lower() == tostring(pairCfg.winner):lower() end
+    local HELP = "duo farm commands (a leading 'catn' or '!' is optional): start, stop, status, stats, rejoin, help"
+    local function apply(raw)
+        local text = tostring(raw):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        text = text:gsub("^!%s*", ""):gsub("^catn%s+", "") -- optional "catn" / "!" prefix
+        local cmd = text:match("^(%S+)") or ""
+        if cmd == "help" or cmd == "commands" or cmd == "?" then
+            if amLeader() then send(HELP) end
+        elseif cmd == "start" or cmd == "on" then
             pairCfg.on = true
             pcall(function() state.PairToggle:Set(true) end)
             send(plr.Name .. ": duo farm ON (" .. role() .. ")")
@@ -1840,6 +1848,11 @@ task.spawn(function()
             else
                 send(plr.Name .. ": ON as " .. role() .. ", starting up")
             end
+        elseif cmd == "stats" then
+            send(string.format("%s: lifetime wins %s, total score %s", plr.Name, commas(lifetime.wins or 0), commas(lifetime.score or 0)))
+        elseif cmd == "rejoin" or cmd == "hop" or cmd == "reconnect" then
+            send(plr.Name .. ": rejoining")
+            pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId, plr) end)
         end
     end
     while alive do
@@ -1862,7 +1875,7 @@ task.spawn(function()
                         if type(m) == "table" and m.id then
                             lastId = m.id
                             if seeded and not (m.author and m.author.bot) then
-                                apply((tostring(m.content or ""):lower():gsub("^%s*!?%s*", ""):gsub("%s+$", "")))
+                                apply(m.content)
                             end
                         end
                     end
