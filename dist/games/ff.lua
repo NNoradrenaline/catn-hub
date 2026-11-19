@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.3.0",
+local window = BPUI:CreateWindow({Version = "1.3.1",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1666,10 +1666,11 @@ end})
 local hookSec = pairTab:CreateSection("Discord webhook")
 local hookCfg = {url = "", on = false}
 state.WebhookCfg = hookCfg
-hookSec:AddInput({Name = "Webhook URL", Placeholder = "https://discord.com/api/webhooks/...", Flag = "ff_hook_url",
-    Description = "Saved in plain text in this script's settings file, so don't share that file.",
+hookSec:AddInput({Name = "Webhook URL (optional)", Placeholder = "https://discord.com/api/webhooks/...", Flag = "ff_hook_url",
+    Description = "Only needed if you're NOT using the bot below. If the bot is set up, wins post through it instead. Saved in plain text, so don't share the settings file.",
     Callback = function(v) hookCfg.url = trimName(v) end})
 hookSec:AddToggle({Name = "Notify on every win", Default = false, Flag = "ff_hook_on",
+    Description = "Posts each win to your channel, through the bot when it's set up, otherwise the webhook.",
     Callback = function(v) hookCfg.on = v == true end})
 
 -- Control the duo farm from Discord. A webhook can only send, so taking commands needs a bot token
@@ -1692,13 +1693,24 @@ local function validHook(url)
             or url:match("^https://[%w%.]*discord%.com/api/webhooks/%d+/[%w_%-]+$")) ~= nil
 end
 
--- returns the HTTP status, or nil on failure
+-- the bot is set up (token + a numeric channel): then everything posts as the bot, no webhook needed
+local function botReady()
+    return botCfg.token ~= "" and type(botCfg.channel) == "string" and botCfg.channel:match("^%d+$") ~= nil
+end
+
+-- returns the HTTP status, or nil on failure. Posts as the bot when it is set up (dropping the
+-- webhook-only username field), otherwise falls back to the webhook url.
 local function postHook(url, payload)
     if hookCfg.dryRun then return 204 end -- test hook: skip the network
     local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
     if not req then return nil end
-    local ok, res = pcall(req, {Url = url, Method = "POST", Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode(payload)})
+    local target, headers, body = url, {["Content-Type"] = "application/json"}, payload
+    if botReady() then
+        target = "https://discord.com/api/v10/channels/" .. botCfg.channel .. "/messages"
+        headers["Authorization"] = "Bot " .. botCfg.token
+        body = {content = payload.content, embeds = payload.embeds} -- a bot posts as itself; username/avatar are webhook-only
+    end
+    local ok, res = pcall(req, {Url = target, Method = "POST", Headers = headers, Body = HttpService:JSONEncode(body)})
     return ok and res and res.StatusCode or nil
 end
 
@@ -1772,14 +1784,15 @@ local function winPayload(title, wins, streak)
 end
 
 hookSec:AddButton({Name = "Send a test message", ButtonText = "Test", Callback = function()
-    if not validHook(hookCfg.url) then
-        window:Notify({Title = "Webhook", Content = "That doesn't look like a Discord webhook URL.", Type = "Warning", Duration = 4})
+    if not (botReady() or validHook(hookCfg.url)) then
+        window:Notify({Title = "Discord", Content = "Set up the bot (token + channel) below, or a webhook URL, first.", Type = "Warning", Duration = 4})
         return
     end
     task.spawn(function()
         local code = postHook(hookCfg.url, winPayload("Test message", "-", "-"))
         local good = code and code >= 200 and code < 300
-        window:Notify({Title = "Webhook", Content = good and "Sent, check your channel." or ("Discord said " .. tostring(code or "nothing")),
+        local via = botReady() and "bot" or "webhook"
+        window:Notify({Title = "Discord", Content = good and ("Sent via the " .. via .. ", check your channel.") or ("Discord said " .. tostring(code or "nothing")),
             Type = good and "Success" or "Error", Duration = 4})
     end)
 end})
@@ -1909,7 +1922,7 @@ local function onWinsChanged(lbl)
             local streakLbl = cats and cats:FindFirstChild("WinStreak")
             local payload = winPayload("Win +" .. gained, lbl.Text, streakLbl and streakLbl.Text or "?")
             if state.OnWin then pcall(state.OnWin, payload) end
-            if validHook(hookCfg.url) or hookCfg.dryRun then table.insert(winQueue, payload) end
+            if botReady() or validHook(hookCfg.url) or hookCfg.dryRun then table.insert(winQueue, payload) end
         end
     end
     if not winLast or cur > winLast then
