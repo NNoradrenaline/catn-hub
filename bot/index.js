@@ -200,6 +200,7 @@ async function firebaseAccounts() {
         run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
         placeId: Number(d.pl) || 0,
         jobId: typeof d.j === "string" ? d.j : "",
+        game: typeof d.g === "string" ? d.g : "",
       };
     }
   } catch (e) {
@@ -296,6 +297,7 @@ function accountEmbed(accts, query) {
       { name: "⏱️ Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true },
       { name: ZW, value: ZW, inline: true }
     );
+  if (a.game) embed.addFields({ name: "🎮 Game", value: a.game, inline: false });
   const meta = [];
   if (a.lastSeen) meta.push(`Last seen <t:${a.lastSeen}:R>`);
   if (a.since) meta.push(`tracking since <t:${a.since}:D>`);
@@ -335,20 +337,21 @@ function joinEmbed(accts, query) {
   const q = query.toLowerCase();
   const a = accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q));
   if (!a) return null;
-  const place = a.placeId || FF_PLACE;
+  const where = a.game ? `**${a.game}**` : "their game";
   const age = a.lastSeen ? Math.floor(Date.now() / 1000) - a.lastSeen : Infinity;
   let script, note;
   if (a.jobId && a.online) {
-    script = `game:GetService("TeleportService"):TeleportToPlaceInstance(${place}, "${a.jobId}")`;
+    script = `game:GetService("TeleportService"):TeleportToPlaceInstance(${a.placeId || FF_PLACE}, "${a.jobId}")`;
     note =
       age <= JOIN_FRESH
-        ? `Paste this in your executor to drop into **this account's server** (as of <t:${a.lastSeen}:R>).`
+        ? `Paste this in your executor to drop into this account's server in ${where} (as of <t:${a.lastSeen}:R>).`
         : `⚠️ This was the server <t:${a.lastSeen}:R> — the account may have **hopped since**. If it fails, run \`join ${a.name}\` again in a few seconds for the fresh server.`;
+  } else if (a.placeId) {
+    script = `game:GetService("TeleportService"):Teleport(${a.placeId})`;
+    note = `This account **isn't online right now**, so there's no live server. This joins ${where} on any server instead.`;
   } else {
-    script = `game:GetService("TeleportService"):Teleport(${place})`;
-    note = a.online
-      ? "This account is farming, but on an **older farm version** that doesn't share its server yet — reload the farm to update it. For now this joins **any** Funky Friday server."
-      : "This account **isn't farming right now**, so there's no server to join. This joins **any** Funky Friday server instead.";
+    script = `game:GetService("TeleportService"):Teleport(${FF_PLACE})`;
+    note = "This account hasn't reported a game yet (it needs the updated hub). This joins any Funky Friday server for now.";
   }
   return brand(
     new EmbedBuilder()

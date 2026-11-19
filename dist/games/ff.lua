@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.0",
+local window = BPUI:CreateWindow({Version = "1.8.1",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1869,8 +1869,8 @@ do
             while alive do
                 local data = statData()
                 if STATS_DB ~= "" then
-                    -- overwrite this account's own node; every active account visible in one bot GET, no rate wall
-                    pcall(req, {Url = STATS_DB .. "accounts/" .. plr.Name .. ".json", Method = "PUT",
+                    -- merge FF's stats onto this account's node (the hub core writes the base presence); one bot GET, no rate wall
+                    pcall(req, {Url = STATS_DB .. "accounts/" .. plr.Name .. ".json", Method = "PATCH",
                         Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)})
                 else
                     local payload = HttpService:JSONEncode({content = "STAT " .. HttpService:JSONEncode(data)})

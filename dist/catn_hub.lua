@@ -4553,7 +4553,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.15.0"
+local HUB_VERSION = "1.16.0"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -5078,4 +5078,32 @@ end, function(e) return tostring(e) .. "\n" .. debug.traceback() end)
 if not hubOk then
     warn("[catn hub] failed to start: " .. tostring(hubRes))
 end
+
+-- Universal presence: every hub user, in any game, writes their live server so the bot can join them.
+-- PATCH merges this account's node, so a game script (e.g. Funky Friday) can add richer stats on top.
+do
+    local DB = "https://catn-db-default-rtdb.firebaseio.com/"
+    local req = request or http_request or (syn and syn.request) or (http and http.request)
+    if req and DB ~= "" then
+        task.spawn(function()
+            local me = game:GetService("Players").LocalPlayer
+            while not me do task.wait() me = game:GetService("Players").LocalPlayer end
+            local HttpService = game:GetService("HttpService")
+            local gname
+            pcall(function()
+                local info = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+                gname = info and info.Name
+            end)
+            local url = DB .. "accounts/" .. me.Name .. ".json"
+            while true do
+                local body = HttpService:JSONEncode({
+                    n = me.Name, pl = game.PlaceId, j = game.JobId, u = game.GameId, g = gname, t = os.time(),
+                })
+                pcall(req, {Url = url, Method = "PATCH", Headers = {["Content-Type"] = "application/json"}, Body = body})
+                task.wait(45)
+            end
+        end)
+    end
+end
+
 return hubRes
