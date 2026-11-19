@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.7.0",
+local window = BPUI:CreateWindow({Version = "1.7.1",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1880,7 +1880,7 @@ do
                     end
                 end
                 pwrite(MSG_FILE, {id = msgId, w = realW, p = realP, ts = realTS}) -- keep the last real values on disk
-                task.wait(120)
+                task.wait(45) -- refresh often so the server id the bot hands out stays current across hops
             end
         end)
     end

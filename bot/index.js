@@ -25,8 +25,9 @@ if (!TOKEN) {
 const STATS_WEBHOOK = (process.env.STATS_WEBHOOK || "").trim();
 const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
 const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "workspace", "FFAutoFarm");
-const ONLINE_LOCAL = 45;
-const ONLINE_REMOTE = 200;
+const ONLINE_LOCAL = 60;
+const ONLINE_REMOTE = 150; // ~3 missed 45s refreshes
+const JOIN_FRESH = 75; // a server id newer than this is current; older may have hopped
 const COLOR = 0x8f70ec;
 const ZW = "​"; // zero-width spacer for a clean 3-column grid
 const FF_PLACE = 6447798030; // Funky Friday place id (fallback when no live server is known)
@@ -288,15 +289,19 @@ function joinEmbed(accts, query) {
   const a = accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q));
   if (!a) return null;
   const place = a.placeId || FF_PLACE;
+  const age = a.lastSeen ? Math.floor(Date.now() / 1000) - a.lastSeen : Infinity;
   let script, note;
-  if (a.jobId) {
+  if (a.jobId && a.online) {
     script = `game:GetService("TeleportService"):TeleportToPlaceInstance(${place}, "${a.jobId}")`;
-    note = a.online
-      ? "Paste this in your executor to drop into **this account's exact server**."
-      : "⚠️ This account looks offline — that server has probably ended, so this may fail.";
+    note =
+      age <= JOIN_FRESH
+        ? `Paste this in your executor to drop into **this account's server** (as of <t:${a.lastSeen}:R>).`
+        : `⚠️ This was the server <t:${a.lastSeen}:R> — the account may have **hopped since**. If it fails, run \`join ${a.name}\` again in a few seconds for the fresh server.`;
   } else {
     script = `game:GetService("TeleportService"):Teleport(${place})`;
-    note = "No live server is known for this account, so this joins **any** Funky Friday server.";
+    note = a.online
+      ? "This account is farming, but on an **older farm version** that doesn't share its server yet — reload the farm to update it. For now this joins **any** Funky Friday server."
+      : "This account **isn't farming right now**, so there's no server to join. This joins **any** Funky Friday server instead.";
   }
   return brand(
     new EmbedBuilder()
