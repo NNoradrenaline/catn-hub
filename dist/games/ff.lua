@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.4.2",
+local window = BPUI:CreateWindow({Version = "1.5.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1810,6 +1810,48 @@ hookSec:AddButton({Name = "Reset score and win totals", ButtonText = "Reset", Ca
     saveLifetime()
     window:Notify({Title = "Totals", Content = "Score and win totals are back to zero.", Type = "Success", Duration = 3})
 end})
+
+-- ---------- Global stats: report this account to a shared channel so the panel bot can show everyone ----------
+-- Posting to a webhook needs no bot token, so every user reports here with zero setup. Each account keeps ONE
+-- message it edits (id saved to disk), so the channel stays one line per account instead of filling up.
+local STATS_WEBHOOK = "https://discord.com/api/webhooks/1572814663328997406/P0LgC-184HItuVh1XFzmD87VaU8kId-e58K4pudYeN2XmRG8Vsxk7bvKbd8GXi4RmCpp"
+do
+    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+    if req and STATS_WEBHOOK ~= "" then
+        local MSG_FILE = PAIR_FOLDER .. "/statmsg_" .. plr.Name .. ".json"
+        local msgId = (pjson(MSG_FILE) or {}).id
+        local function body()
+            return HttpService:JSONEncode({content = "STAT " .. HttpService:JSONEncode({
+                n = plr.Name,
+                w = tonumber(lifetime.wins) or 0,
+                s = tonumber(lifetime.score) or 0,
+                rw = runStats.startedAt and (runStats.wins or 0) or nil,
+                rs = runStats.startedAt and sessionScore or nil,
+                rt = runStats.startedAt or nil,
+                t = os.time(),
+            })})
+        end
+        task.spawn(function()
+            while alive do
+                local sent = false
+                if msgId then
+                    local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "/messages/" .. msgId, Method = "PATCH",
+                        Headers = {["Content-Type"] = "application/json"}, Body = body()})
+                    sent = ok and res and tonumber(res.StatusCode) ~= nil and res.StatusCode < 300
+                end
+                if not sent then -- no message yet, or it was deleted: post a fresh one and remember its id
+                    local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "?wait=true", Method = "POST",
+                        Headers = {["Content-Type"] = "application/json"}, Body = body()})
+                    if ok and res and res.Body then
+                        local good, m = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                        if good and type(m) == "table" and m.id then msgId = m.id; pwrite(MSG_FILE, {id = m.id}) end
+                    end
+                end
+                task.wait(120)
+            end
+        end)
+    end
+end
 
 -- ---------- Discord bot: online + instant commands over the gateway, REST polling as a fallback ----------
 local API = "https://discord.com/api/v10"

@@ -1,15 +1,13 @@
 // Catn Yapper - a standalone Discord bot you run on your own PC (node index.js).
 // It stays online while this program runs, independent of Roblox, and is a read-only panel over the
-// Funky Friday duo-farm: it reads the per-account stat files the Roblox script writes to disk, so it can
-// report every account and its stats even when the accounts are offline.
+// Funky Friday duo-farm. It shows every account across ALL machines: each hub posts its stats to a shared
+// channel (via STATS_WEBHOOK, no bot token needed), and this bot reads that channel + the local files.
 //
 // Commands (an optional "catn" or "!" prefix works):
-//   accounts            - list every farm account with online status + lifetime/run stats
+//   accounts            - list every account (everyone's) with online status + lifetime/run stats
 //   account <name>      - detailed stats for one account
 //   stats               - totals across all accounts
-//   help                - this list
-//   hi                  - says bye
-//   meow                - a random cat gif
+//   help / hi / meow
 //
 // Farm CONTROL (start/stop/rejoin) stays in the Roblox script and only works while an account is in-game.
 require("dotenv").config();
@@ -24,10 +22,14 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// Where the Roblox script writes the farm files. Override with FARM_DIR in .env if your executor differs.
+// Shared stats channel every hub posts to. Same webhook URL that's baked into the hub script.
+const STATS_WEBHOOK = (process.env.STATS_WEBHOOK || "").trim();
+// Local files this PC's own hub writes (a fresher source for this machine's accounts).
 const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
 const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "workspace", "FFAutoFarm");
-const ONLINE_SECS = 45; // an account is "online" if its stat file was touched within this many seconds
+
+const ONLINE_LOCAL = 45; // local file touched within N seconds = online
+const ONLINE_REMOTE = 200; // remote stat posted within N seconds = online (hubs post every ~120s)
 const COLOR = 0x8f70ec;
 
 function readJson(p) {
@@ -58,8 +60,8 @@ function dur(sec) {
   return `${sec}s`;
 }
 
-// Reads every lifetime_<name>.json (and its matching stats_<name>.json run file) from FARM_DIR.
-function readAccounts() {
+// This PC's accounts, from the local FFAutoFarm files.
+function localAccounts() {
   let files;
   try {
     files = fs.readdirSync(FARM_DIR);
@@ -67,7 +69,7 @@ function readAccounts() {
     return [];
   }
   const now = Math.floor(Date.now() / 1000);
-  const accounts = [];
+  const out = [];
   for (const f of files) {
     const m = f.match(/^lifetime_(.+)\.json$/);
     if (!m) continue;
@@ -75,20 +77,83 @@ function readAccounts() {
     const life = readJson(path.join(FARM_DIR, f)) || {};
     const runFile = readJson(path.join(FARM_DIR, `stats_${name}.json`));
     const lastSeen = Math.max(Number(life.lastSeen) || 0, (runFile && Number(runFile.lastSeen)) || 0);
-    accounts.push({
+    out.push({
       name,
       wins: Number(life.wins) || 0,
       score: Number(life.score) || 0,
       since: Number(life.since) || 0,
       lastSeen,
-      online: now - lastSeen < ONLINE_SECS,
+      online: now - lastSeen < ONLINE_LOCAL,
       run: runFile && runFile.startedAt
         ? { wins: Number(runFile.wins) || 0, score: Number(runFile.score) || 0, startedAt: Number(runFile.startedAt) || 0 }
         : null,
     });
   }
-  accounts.sort((a, b) => b.wins - a.wins);
-  return accounts;
+  return out;
+}
+
+// Resolve the stats channel id from the webhook once, then cache it.
+let statsChannelId = null;
+async function getStatsChannelId() {
+  if (statsChannelId || !STATS_WEBHOOK) return statsChannelId;
+  try {
+    const res = await fetch(STATS_WEBHOOK);
+    const d = await res.json();
+    if (d && d.channel_id) statsChannelId = String(d.channel_id);
+  } catch (e) {
+    /* ignore; we'll retry next call */
+  }
+  return statsChannelId;
+}
+
+// Every account reported to the shared channel (all machines). Keeps the most recent per name.
+async function remoteAccounts() {
+  const out = {};
+  const ch = await getStatsChannelId();
+  if (!ch) return out;
+  let msgs;
+  try {
+    const res = await fetch(`https://discord.com/api/v10/channels/${ch}/messages?limit=100`, {
+      headers: { Authorization: "Bot " + TOKEN },
+    });
+    if (!res.ok) return out;
+    msgs = await res.json();
+  } catch (e) {
+    return out;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  for (const m of Array.isArray(msgs) ? msgs : []) {
+    const c = (m && m.content) || "";
+    if (!c.startsWith("STAT ")) continue;
+    let d;
+    try {
+      d = JSON.parse(c.slice(5));
+    } catch (e) {
+      continue;
+    }
+    if (!d || typeof d.n !== "string") continue;
+    const t = Number(d.t) || 0;
+    if (out[d.n] && out[d.n].lastSeen >= t) continue;
+    out[d.n] = {
+      name: d.n,
+      wins: Number(d.w) || 0,
+      score: Number(d.s) || 0,
+      since: 0,
+      lastSeen: t,
+      online: now - t < ONLINE_REMOTE,
+      run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
+    };
+  }
+  return out;
+}
+
+// All accounts everywhere: remote (shared channel), with this PC's local files layered on top (fresher).
+async function allAccounts() {
+  const byName = {};
+  const remote = await remoteAccounts();
+  for (const a of Object.values(remote)) byName[a.name.toLowerCase()] = a;
+  for (const a of localAccounts()) byName[a.name.toLowerCase()] = a;
+  return Object.values(byName).sort((a, b) => b.wins - a.wins);
 }
 
 const HELP = new EmbedBuilder()
@@ -96,7 +161,7 @@ const HELP = new EmbedBuilder()
   .setColor(COLOR)
   .setDescription(
     [
-      "**Farm panel**",
+      "**Farm panel (everyone's accounts)**",
       "`accounts` - every account with online status + stats",
       "`account <name>` - detailed stats for one account",
       "`stats` - totals across all accounts",
@@ -119,23 +184,23 @@ async function catGif() {
   return "https://cataas.com/cat/gif?" + Date.now();
 }
 
-function accountsEmbed() {
-  const accts = readAccounts();
+function accountsEmbed(accts) {
   if (!accts.length) return null;
   const now = Math.floor(Date.now() / 1000);
   const embed = new EmbedBuilder().setTitle("Farm accounts").setColor(COLOR);
-  for (const a of accts) {
+  for (const a of accts.slice(0, 25)) {
     let v = `${a.online ? "🟢 online" : "⚪ offline"} · lifetime **${a.wins}** wins · **${abbrev(a.score)}** score`;
     if (a.online && a.run) v += `\nthis run: ${a.run.wins} wins · ${abbrev(a.run.score)} · ${dur(now - a.run.startedAt)}`;
     embed.addFields({ name: a.name, value: v });
   }
   const online = accts.filter((a) => a.online).length;
-  embed.setFooter({ text: `${accts.length} account(s) · ${online} online` });
+  let footer = `${accts.length} account(s) · ${online} online`;
+  if (accts.length > 25) footer += " · showing top 25 by wins";
+  embed.setFooter({ text: footer });
   return embed;
 }
 
-function accountEmbed(query) {
-  const accts = readAccounts();
+function accountEmbed(accts, query) {
   const q = query.toLowerCase();
   const a = accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q));
   if (!a) return null;
@@ -158,8 +223,7 @@ function accountEmbed(query) {
   return embed;
 }
 
-function statsEmbed() {
-  const accts = readAccounts();
+function statsEmbed(accts) {
   const tw = accts.reduce((s, a) => s + a.wins, 0);
   const ts = accts.reduce((s, a) => s + a.score, 0);
   const online = accts.filter((a) => a.online).length;
@@ -177,24 +241,25 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-client.once(Events.ClientReady, (c) => console.log("online as " + c.user.tag + " | farm dir: " + FARM_DIR));
+client.once(Events.ClientReady, (c) =>
+  console.log("online as " + c.user.tag + " | stats channel: " + (STATS_WEBHOOK ? "shared" : "local only") + " | farm dir: " + FARM_DIR)
+);
 
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot) return;
   const text = msg.content.trim().toLowerCase().replace(/^!\s*/, "").replace(/^catn\s+/, "");
-  const parts = text.split(/\s+/);
-  const word = parts[0] || "";
+  const word = text.split(/\s+/)[0] || "";
   const rest = text.slice(word.length).trim();
   try {
     if (word === "accounts" || word === "list") {
-      const e = accountsEmbed();
-      await msg.channel.send(e ? { embeds: [e] } : "No farm accounts found on this PC yet (run the farm once).");
+      const e = accountsEmbed(await allAccounts());
+      await msg.channel.send(e ? { embeds: [e] } : "No farm accounts reported yet.");
     } else if (word === "account" || word === "acc") {
       if (!rest) return void (await msg.channel.send("Usage: `account <name>`"));
-      const e = accountEmbed(rest);
+      const e = accountEmbed(await allAccounts(), rest);
       await msg.channel.send(e ? { embeds: [e] } : `No account matching "${rest}".`);
     } else if (word === "stats" || word === "totals") {
-      await msg.channel.send({ embeds: [statsEmbed()] });
+      await msg.channel.send({ embeds: [statsEmbed(await allAccounts())] });
     } else if (word === "help" || word === "commands" || word === "?") {
       await msg.channel.send({ embeds: [HELP] });
     } else if (word === "hi") {
