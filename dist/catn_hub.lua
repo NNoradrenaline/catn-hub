@@ -5084,10 +5084,17 @@ end
 do
     local DB = "https://catn-db-default-rtdb.firebaseio.com/"
     local req = request or http_request or (syn and syn.request) or (http and http.request)
+    -- re-running the loader replaces the previous loop instead of stacking a second writer
+    local env = (getgenv and getgenv()) or _G
+    local token = {}
+    env.__catnPresence = token
     if req and DB ~= "" then
         task.spawn(function()
             local me = game:GetService("Players").LocalPlayer
-            while not me do task.wait() me = game:GetService("Players").LocalPlayer end
+            while not me do
+                task.wait()
+                me = game:GetService("Players").LocalPlayer
+            end
             local HttpService = game:GetService("HttpService")
             local gname
             pcall(function()
@@ -5095,7 +5102,7 @@ do
                 gname = info and info.Name
             end)
             local url = DB .. "accounts/" .. me.Name .. ".json"
-            while true do
+            while env.__catnPresence == token do
                 local body = HttpService:JSONEncode({
                     n = me.Name, pl = game.PlaceId, j = game.JobId, u = game.GameId, g = gname, t = os.time(),
                 })

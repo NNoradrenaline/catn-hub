@@ -1,56 +1,58 @@
 # Catn Yapper (standalone bot)
 
-A Discord bot you run on your own PC. It stays online while this program is running (independent of Roblox)
-and acts as a read-only **panel over the Funky Friday duo-farm**: it reads the per-account stat files the
-Roblox script writes to disk, so it can report every account and its stats even when the accounts are offline.
+A Discord bot you run on your own PC. It stays online while this program runs (independent of Roblox) and is a
+panel over **every account running Catn Hub, in any game**: who's online, where they are, their stats, and a
+one-click way to join their exact server.
+
+**Only server admins (and the owner) get replies.** Everyone else is ignored, buttons included.
 
 ## Commands
 
-An optional `catn` or `!` prefix works on all of them.
+An optional `catn` or `!` prefix works on all of them. Typos are fine: unknown names get "did you mean…".
 
 | Command | What it does |
 | --- | --- |
-| `accounts` | List every farm account with online status + lifetime/run stats |
-| `account <name>` | Detailed stats for one account |
-| `stats` | Totals across all accounts |
-| `help` | The command list |
-| `hi` | Says bye |
-| `meow` | A random cat gif |
+| `accounts` | Every account: wins, points, game and status (pages automatically past 25) |
+| `online` | Only accounts online right now |
+| `account <name>` | Full stats for one account, with 🔄 Refresh / 🔗 Join buttons |
+| `join <name>` | Executor script **and** a one-click Roblox link into that account's live server |
+| `compare <a> <b>` | Two accounts side by side |
+| `games` | Who's online, grouped by game |
+| `search <game>` | Accounts in a given game |
+| `top` / `top points` / `top score` | Leaderboards |
+| `stats` | Totals across everyone |
+| `status` | Bot uptime, tracked/online counts, data store |
+| `prune` | Drop accounts not seen in 6 hours (also runs every 30 min by itself) |
+| `remove <exact name>` | Forget one account |
+| `help`, `hi`, `meow` | Help card, says bye, random cat gif |
 
-Farm **control** (`start`, `stop`, `status`, `rejoin`) stays in the Roblox hub script and only works while an
-account is in-game - this bot just reports.
+Join buttons answer privately (only the clicker sees the script).
 
 ## Run it
 
-1. Install **Node.js 18 or newer** from https://nodejs.org (the LTS build is fine).
-2. Open a terminal in this `bot` folder.
-3. Install the dependencies:
-   ```
-   npm install
-   ```
-4. Make your config file: copy `.env.example` to `.env`, open `.env`, and paste your bot token after
-   `DISCORD_TOKEN=`. Use a freshly **reset** token (Developer Portal -> your app -> Bot -> Reset Token).
-   Keep `.env` private - it is your token.
-5. In the Developer Portal, make sure **Message Content Intent** is ON (Bot tab -> Privileged Gateway Intents).
-6. Start it:
-   ```
-   npm start
-   ```
-   You should see `online as Catn Yapper#....` and the bot shows online in Discord.
+1. Install **Node.js 18 or newer** from https://nodejs.org.
+2. In this `bot` folder: `npm install`
+3. Copy `.env.example` to `.env` and fill in `DISCORD_TOKEN` (a freshly reset token) and `FIREBASE_URL`.
+   Keep `.env` private.
+4. Developer Portal → Bot → turn on **Message Content Intent**.
+5. Double-click `start.bat` (Windows). It restarts the bot automatically if it ever stops; close the window to
+   stop it for good. Or run `npm start`.
 
-On Windows you can also just double-click `start.bat`.
+Run only one copy at a time, or it will reply twice.
 
-Leave it running - closing the window (or turning off the PC) takes the bot offline. To keep it up without a
-window, run it with a process manager like `pm2` (`npm i -g pm2`, then `pm2 start index.js --name catn-yapper`).
+## Where the data comes from
 
-## Where the stats come from
+- **Firebase Realtime DB** (`FIREBASE_URL`), the main store: every hub writes its account's live server + game
+  every 45s, and the Funky Friday script adds wins/points/score on top.
+- **Local farm files** in `%LOCALAPPDATA%\Real\workspace\FFAutoFarm` (override with `FARM_DIR`).
+- **Legacy stats channel** (`STATS_WEBHOOK`), for accounts still on an older hub.
 
-The bot reads the Roblox script's farm files - by default
-`%LOCALAPPDATA%\Real\workspace\FFAutoFarm` (the `lifetime_<name>.json` and `stats_<name>.json` files). If your
-executor stores them somewhere else, set `FARM_DIR=C:\path\to\FFAutoFarm` in `.env`. An account counts as
-"online" when its file was updated in the last 45 seconds.
+When sources disagree, the most recently updated one wins.
 
-## Notes
+## Tests
 
-- The bot replies in whatever channel a message was posted, in any channel it can see and send in.
-- Run only one copy at a time, or it will reply twice.
+```
+BOT_TEST=1 node test.js
+```
+
+Runs the render, lookup, merge and admin-gate logic offline (no token or network needed).

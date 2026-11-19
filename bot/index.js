@@ -15,13 +15,27 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { Client, GatewayIntentBits, Events, EmbedBuilder } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  Events,
+  EmbedBuilder,
+  PermissionsBitField,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  escapeMarkdown,
+} = require("discord.js");
+const esc = (s) => escapeMarkdown(String(s == null ? "" : s)); // usernames like Eloise_QwQ must not turn into italics
 
+const TEST = !!process.env.BOT_TEST; // when set, export helpers and don't log in (for the test harness)
 const TOKEN = process.env.DISCORD_TOKEN;
-if (!TOKEN) {
+if (!TOKEN && !TEST) {
   console.error("No token. Copy .env.example to .env and put your bot token in DISCORD_TOKEN.");
   process.exit(1);
 }
+const START_TS = Math.floor(Date.now() / 1000);
+let BOT_ICON = ""; // set to the bot's own avatar on ready, so every card is branded with no hosted asset
 
 const STATS_WEBHOOK = (process.env.STATS_WEBHOOK || "").trim();
 const FIREBASE = (process.env.FIREBASE_URL || "").trim().replace(/\/+$/, "");
@@ -35,12 +49,11 @@ const COLOR = 0x8f70ec;
 const ZW = "​"; // zero-width spacer for a clean 3-column grid
 const FF_PLACE = 6447798030; // Funky Friday place id (fallback when no live server is known)
 
-// One consistent look for every card: author line, subtle footer, timestamp.
+// One consistent look for every card: branded author (with the bot's own avatar), subtle footer, timestamp.
 function brand(embed, footer) {
-  return embed
-    .setAuthor({ name: "Catn Yapper" })
-    .setFooter({ text: footer ? footer + " · Catn Hub" : "Catn Hub" })
-    .setTimestamp();
+  embed.setAuthor(BOT_ICON ? { name: "Catn Yapper", iconURL: BOT_ICON } : { name: "Catn Yapper" });
+  embed.setFooter(BOT_ICON ? { text: footer ? footer + " · Catn Hub" : "Catn Hub", iconURL: BOT_ICON } : { text: footer ? footer + " · Catn Hub" : "Catn Hub" });
+  return embed.setTimestamp();
 }
 
 function readJson(p) {
@@ -101,6 +114,7 @@ function localAccounts() {
       online: now - lastSeen < ONLINE_LOCAL,
       placeId: Number(msg.pl) || 0,
       jobId: typeof msg.j === "string" ? msg.j : "",
+      game: "Funky Friday", // the FFAutoFarm files only come from the Funky Friday script
       run: runFile && runFile.startedAt
         ? { wins: Number(runFile.wins) || 0, score: Number(runFile.score) || 0, startedAt: Number(runFile.startedAt) || 0 }
         : null,
@@ -171,6 +185,7 @@ async function remoteAccounts() {
       run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
       placeId: Number(d.pl) || 0,
       jobId: typeof d.j === "string" ? d.j : "",
+      game: "Funky Friday", // channel STAT lines only come from the Funky Friday script
     };
   }
   return out;
@@ -202,7 +217,7 @@ async function firebaseAccounts() {
         run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
         placeId: Number(d.pl) || 0,
         jobId: typeof d.j === "string" ? d.j : "",
-        game: typeof d.g === "string" ? d.g : "",
+        game: typeof d.g === "string" && d.g ? d.g : Number(d.pl) === FF_PLACE ? "Funky Friday" : "",
       };
     }
   } catch (e) {
@@ -212,45 +227,67 @@ async function firebaseAccounts() {
 }
 
 // All accounts everywhere: channel (legacy) < Firebase (global) < this PC's local files (freshest), merged by name.
-async function allAccounts() {
+// Short cache so a burst of commands / button clicks doesn't refetch Firebase + channel history each time.
+let acctCache = null,
+  acctCacheAt = 0;
+const CACHE_MS = 10 * 1000;
+async function allAccounts(fresh) {
+  if (!fresh && acctCache && Date.now() - acctCacheAt < CACHE_MS) return acctCache;
+  acctCache = await loadAccounts();
+  acctCacheAt = Date.now();
+  return acctCache;
+}
+function invalidateAccounts() {
+  acctCache = null;
+}
+
+// Union of every source's fields; where two sources overlap, the most recently seen record wins.
+function mergeAccounts(lists) {
   const byName = {};
-  const layer = (list) => {
+  for (const list of lists)
     for (const a of list) {
       const k = a.name.toLowerCase();
-      byName[k] = byName[k] ? { ...byName[k], ...a } : a;
+      const prev = byName[k];
+      byName[k] = !prev ? a : (a.lastSeen || 0) >= (prev.lastSeen || 0) ? { ...prev, ...a } : { ...a, ...prev };
     }
-  };
-  layer(Object.values(await remoteAccounts()));
-  layer(Object.values(await firebaseAccounts()));
-  layer(localAccounts());
   return Object.values(byName).sort((a, b) => b.wins - a.wins);
 }
 
-const HELP = brand(
-  new EmbedBuilder()
-    .setTitle("🎧 Catn Yapper")
-    .setColor(COLOR)
-    .setDescription("Your panel over the Funky Friday farm. Prefix with `catn ` or `!` if you like — both optional.")
-    .addFields(
-      {
-        name: "📊 Stats",
-        value: [
-          "**`accounts`** — every account: wins, points, game & status",
-          "**`online`** — only the ones online right now",
-          "**`account <name>`** — full stats for one account",
-          "**`games`** — who's online, grouped by game",
-          "**`search <game>`** — accounts in a given game",
-          "**`top`** — leaderboard by wins",
-          "**`stats`** — grand totals across everyone",
-        ].join("\n"),
-      },
-      {
-        name: "🔗 Jump in",
-        value: "**`join <name>`** — a copy-paste script **and a one-click link** into that account's live server, in any game",
-      },
-      { name: "🐱 Fun", value: "**`meow`** — a random cat gif · **`hi`** — I say bye" }
-    )
-);
+async function loadAccounts() {
+  const [remote, fb] = await Promise.all([remoteAccounts(), firebaseAccounts()]);
+  return mergeAccounts([Object.values(remote), Object.values(fb), localAccounts()]);
+}
+
+function helpEmbed() {
+  return brand(
+    new EmbedBuilder()
+      .setTitle("🎧 Catn Yapper")
+      .setColor(COLOR)
+      .setDescription("Your panel over the hub farms, across every game. Prefix with `catn ` or `!` if you like — both optional. _Admins only._")
+      .addFields(
+        {
+          name: "📊 Stats",
+          value: [
+            "**`accounts`** — every account: wins, points, game & status",
+            "**`online`** — only the ones online right now",
+            "**`account <name>`** — full stats, with 🔄 Refresh / 🔗 Join buttons",
+            "**`compare <name> <name>`** — two accounts side by side",
+            "**`games`** — who's online, grouped by game",
+            "**`search <game>`** — accounts in a given game",
+            "**`top`** / `top points` / `top score` — leaderboards",
+            "**`stats`** — grand totals · **`status`** — bot health",
+          ].join("\n"),
+        },
+        {
+          name: "🔗 Jump in",
+          value: "**`join <name>`** — a copy-paste script **and a one-click link** into that account's live server, in any game",
+        },
+        { name: "🛠️ Admin", value: "**`prune`** — drop stale accounts now · **`remove <exact name>`** — forget one account" },
+        { name: "💡 Tips", value: "Typos are fine — I'll suggest the closest names. Join buttons answer privately, so only you see the script." },
+        { name: "🐱 Fun", value: "**`meow`** — a random cat gif · **`hi`** — I say bye" }
+      )
+  );
+}
 
 async function catGif() {
   try {
@@ -266,13 +303,13 @@ async function catGif() {
 function accountsEmbed(accts, title) {
   if (!accts.length) return null;
   const now = Math.floor(Date.now() / 1000);
-  const embed = new EmbedBuilder().setTitle("🎧 " + (title || "Funky Friday farm")).setColor(COLOR);
+  const embed = new EmbedBuilder().setTitle("🎧 " + (title || "Hub accounts")).setColor(COLOR);
   for (const a of accts.slice(0, 25)) {
     let v = `${a.online ? "🟢 online" : "⚪ offline"} · **${a.wins}** wins · **${abbrev(a.points)}** pts · ${abbrev(a.totalScore)} score`;
-    if (a.game) v += ` · 🎮 ${a.game}`;
+    if (a.game) v += ` · 🎮 ${esc(a.game)}`;
     v += `\n╰ script farmed: ${a.scriptWins} wins · ${abbrev(a.scriptScore)}`;
     if (a.online && a.run) v += ` · this run ${a.run.wins}w (${dur(now - a.run.startedAt)})`;
-    embed.addFields({ name: "▸ " + a.name, value: v });
+    embed.addFields({ name: "▸ " + esc(a.name), value: v });
   }
   const online = accts.filter((a) => a.online).length;
   let footer = `${accts.length} account${accts.length === 1 ? "" : "s"} · ${online} online`;
@@ -281,12 +318,11 @@ function accountsEmbed(accts, title) {
 }
 
 function accountEmbed(accts, query) {
-  const q = query.toLowerCase();
-  const a = accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q));
+  const a = findAccount(accts, query);
   if (!a) return null;
   const now = Math.floor(Date.now() / 1000);
   const embed = new EmbedBuilder()
-    .setTitle((a.online ? "🟢 " : "⚪ ") + a.name)
+    .setTitle((a.online ? "🟢 " : "⚪ ") + esc(a.name))
     .setColor(a.online ? 0x57f287 : 0x747f8d)
     .addFields(
       { name: "🏆 Wins", value: String(a.wins), inline: true },
@@ -302,15 +338,76 @@ function accountEmbed(accts, query) {
       { name: "⏱️ Farming for", value: a.online ? dur(now - a.run.startedAt) : "—", inline: true },
       { name: ZW, value: ZW, inline: true }
     );
-  if (a.game) embed.addFields({ name: "🎮 Game", value: a.game, inline: false });
+  if (a.game) embed.addFields({ name: "🎮 Game", value: esc(a.game), inline: false });
   const meta = [];
   if (a.lastSeen) meta.push(`Last seen <t:${a.lastSeen}:R>`);
   if (a.since) meta.push(`tracking since <t:${a.since}:D>`);
   if (meta.length) embed.addFields({ name: ZW, value: meta.join(" · ") });
   const peers = a.online && a.jobId ? samePeers(accts, a) : [];
-  if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 In the same server", value: peers.join(", "), inline: false });
+  if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 In the same server", value: peers.map(esc).join(", ").slice(0, 1000), inline: false });
   embed.addFields({ name: "🔗 Join", value: `\`join ${a.name}\`` });
   return brand(embed, a.online ? "online" : "offline");
+}
+
+// Exact name first, then a substring match.
+function findAccount(accts, query) {
+  const q = String(query || "").toLowerCase();
+  if (!q) return null;
+  return accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q)) || null;
+}
+
+function editDistance(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return dp[a.length][b.length];
+}
+
+// "No account matching X" plus up to 3 close names, so a typo still gets you there.
+function notFound(accts, query) {
+  const q = String(query || "").toLowerCase();
+  const close = accts
+    .map((a) => ({ name: a.name, d: editDistance(q, a.name.toLowerCase()) }))
+    .filter((x) => x.d <= Math.max(2, Math.floor(q.length / 3)))
+    .sort((x, y) => x.d - y.d)
+    .slice(0, 3)
+    .map((x) => "`" + x.name + "`");
+  return `No account matching "${esc(query)}".` + (close.length ? ` Did you mean ${close.join(", ")}?` : "");
+}
+
+// Two accounts side by side.
+function compareEmbed(a, b) {
+  const row = (label, f) => ({ name: label, value: `${esc(a.name)}: **${f(a)}**\n${esc(b.name)}: **${f(b)}**`, inline: true });
+  const lead = a.wins === b.wins ? "Dead even on wins." : `${esc(a.wins > b.wins ? a.name : b.name)} leads by **${Math.abs(a.wins - b.wins)}** wins.`;
+  return brand(
+    new EmbedBuilder()
+      .setTitle(`⚔️ ${esc(a.name)} vs ${esc(b.name)}`)
+      .setColor(COLOR)
+      .setDescription(lead)
+      .addFields(
+        row("🏆 Wins", (x) => x.wins),
+        row("💰 Points", (x) => abbrev(x.points)),
+        row("📈 Total score", (x) => abbrev(x.totalScore)),
+        row("🤖 Script wins", (x) => x.scriptWins),
+        row("🟢 Status", (x) => (x.online ? "online" : "offline")),
+        row("🎮 Game", (x) => (x.game ? esc(x.game) : "—"))
+      )
+  );
+}
+
+// Buttons under cards. customIds carry the exact account name.
+function cardButtons(name) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("acct:" + name).setLabel("Refresh").setEmoji("🔄").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("join:" + name).setLabel("Join").setEmoji("🔗").setStyle(ButtonStyle.Primary)
+  );
+}
+function joinButtons(name) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("joinr:" + name).setLabel("Refresh server").setEmoji("🔄").setStyle(ButtonStyle.Secondary)
+  );
 }
 
 // Online accounts sitting in the same server instance as `a` (handy for duo/group joins).
@@ -329,7 +426,7 @@ function gamesEmbed(accts) {
   }
   const lines = Object.entries(by)
     .sort((x, y) => y[1].length - x[1].length)
-    .map(([g, names]) => `🎮 **${g}** — ${names.length}\n${names.slice(0, 15).join(", ")}${names.length > 15 ? ` +${names.length - 15} more` : ""}`);
+    .map(([g, names]) => `🎮 **${esc(g)}** — ${names.length}\n${names.slice(0, 15).map(esc).join(", ")}${names.length > 15 ? ` +${names.length - 15} more` : ""}`);
   return brand(new EmbedBuilder().setTitle("🎮 Active games").setColor(COLOR).setDescription(lines.join("\n\n")));
 }
 
@@ -352,12 +449,65 @@ async function pruneStale() {
   }
 }
 
-function topEmbed(accts) {
+const TOP_METRICS = {
+  wins: { key: "wins", label: "wins", title: "🏆 Top by wins", fmt: (n) => String(n) },
+  points: { key: "points", label: "points", title: "💰 Top by points", fmt: abbrev },
+  score: { key: "totalScore", label: "score", title: "📈 Top by total score", fmt: abbrev },
+};
+function topEmbed(accts, metric) {
   if (!accts.length) return null;
-  const top = [...accts].sort((a, b) => b.wins - a.wins).slice(0, 10);
+  const m = TOP_METRICS[metric] || TOP_METRICS.wins;
+  const top = [...accts].sort((a, b) => (b[m.key] || 0) - (a[m.key] || 0)).slice(0, 10);
   const medal = ["🥇", "🥈", "🥉"];
-  const lines = top.map((a, i) => `${medal[i] || `\`${i + 1}.\``} **${a.name}** — ${a.wins} wins · ${abbrev(a.points)} pts ${a.online ? "🟢" : ""}`);
-  return brand(new EmbedBuilder().setTitle("🏆 Top accounts by wins").setColor(0xffd166).setDescription(lines.join("\n")));
+  const lines = top.map((a, i) => `${medal[i] || `\`${i + 1}.\``} **${esc(a.name)}** — ${m.fmt(a[m.key] || 0)} ${m.label} ${a.online ? "🟢" : ""}`);
+  return brand(new EmbedBuilder().setTitle(m.title).setColor(0xffd166).setDescription(lines.join("\n")));
+}
+
+// Accounts list split into Discord-safe pages (25 fields each, up to 10 embeds).
+function accountsEmbeds(accts, title) {
+  if (!accts.length) return [];
+  const pages = [];
+  for (let i = 0; i < accts.length && pages.length < 10; i += 25) {
+    const e = accountsEmbed(accts.slice(i, i + 25), title);
+    if (e) pages.push(e);
+  }
+  return pages;
+}
+
+function statusEmbed(accts) {
+  const online = accts.filter((a) => a.online).length;
+  const games = new Set(accts.filter((a) => a.online && a.game).map((a) => a.game)).size;
+  return brand(
+    new EmbedBuilder()
+      .setTitle("🩺 Catn Yapper status")
+      .setColor(0x57f287)
+      .addFields(
+        { name: "Uptime", value: dur(Math.floor(Date.now() / 1000) - START_TS), inline: true },
+        { name: "Accounts tracked", value: String(accts.length), inline: true },
+        { name: "Online now", value: String(online), inline: true },
+        { name: "Active games", value: String(games), inline: true },
+        { name: "Store", value: FIREBASE ? "Firebase DB" : STATS_WEBHOOK ? "Discord channel" : "local only", inline: true },
+        { name: ZW, value: ZW, inline: true }
+      )
+  );
+}
+
+// Only server admins (or the owner) get a reply.
+function isAdmin(msg) {
+  if (!msg.guild || !msg.member) return false;
+  if (msg.guild.ownerId === msg.author.id) return true;
+  return msg.member.permissions.has(PermissionsBitField.Flags.Administrator);
+}
+
+// Delete one account's node from the DB (admin cleanup).
+async function removeAccount(name) {
+  if (!FIREBASE) return false;
+  try {
+    const res = await fetch(FIREBASE + "/accounts/" + encodeURIComponent(name) + ".json", { method: "DELETE" });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
 }
 
 function statsEmbed(accts) {
@@ -380,10 +530,9 @@ function statsEmbed(accts) {
 
 // A copy-paste executor script that teleports you into this account's live server.
 function joinEmbed(accts, query) {
-  const q = query.toLowerCase();
-  const a = accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q));
+  const a = findAccount(accts, query);
   if (!a) return null;
-  const where = a.game ? `**${a.game}**` : "their game";
+  const where = a.game ? `**${esc(a.game)}**` : "their game";
   const age = a.lastSeen ? Math.floor(Date.now() / 1000) - a.lastSeen : Infinity;
   let script, note;
   if (a.jobId && a.online) {
@@ -400,7 +549,7 @@ function joinEmbed(accts, query) {
     note = "This account hasn't reported a game yet (it needs the updated hub). This joins any Funky Friday server for now.";
   }
   const embed = new EmbedBuilder()
-    .setTitle("🔗 Join " + a.name)
+    .setTitle("🔗 Join " + esc(a.name))
     .setColor(a.online ? 0x57f287 : COLOR)
     .setDescription(`${note}\n\`\`\`lua\n${script}\n\`\`\``);
   if (a.jobId && a.placeId)
@@ -409,7 +558,7 @@ function joinEmbed(accts, query) {
       value: `[Launch Roblox into this server](https://www.roblox.com/games/start?placeId=${a.placeId}&gameInstanceId=${a.jobId})`,
     });
   const peers = a.jobId && a.online ? samePeers(accts, a) : [];
-  if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 Also here", value: peers.join(", ") });
+  if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 Also here", value: peers.map(esc).join(", ").slice(0, 1000) });
   return brand(embed, a.game || (a.online ? "online" : "offline"));
 }
 
@@ -418,59 +567,171 @@ const client = new Client({
 });
 
 client.once(Events.ClientReady, (c) => {
-  console.log("online as " + c.user.tag + " | db: " + (FIREBASE ? "firebase" : STATS_WEBHOOK ? "channel" : "local only") + " | farm dir: " + FARM_DIR);
+  BOT_ICON = c.user.displayAvatarURL({ size: 128 });
+  console.log("online as " + c.user.tag + " | db: " + (FIREBASE ? "firebase" : STATS_WEBHOOK ? "channel" : "local only") + " | admins only | farm dir: " + FARM_DIR);
   if (FIREBASE) {
     pruneStale();
-    setInterval(pruneStale, 30 * 60 * 1000); // keep the roster tidy
+    setInterval(() => pruneStale().then(invalidateAccounts), 30 * 60 * 1000); // keep the roster tidy
   }
 });
 
+// Resolve a text command into messages to send. Pure except for the data/network calls it awaits — reused by tests.
+async function handleCommand(word, rest) {
+  switch (word) {
+    case "accounts":
+    case "list": {
+      const pages = accountsEmbeds(await allAccounts());
+      return pages.length ? { embeds: pages } : "No accounts reported yet.";
+    }
+    case "online": {
+      const pages = accountsEmbeds((await allAccounts()).filter((a) => a.online), "Accounts online now");
+      return pages.length ? { embeds: pages } : "No accounts are online right now.";
+    }
+    case "games": {
+      const e = gamesEmbed(await allAccounts());
+      return e ? { embeds: [e] } : "No accounts are online right now.";
+    }
+    case "search":
+    case "find": {
+      if (!rest) return "Usage: `search <game name>`";
+      const hits = (await allAccounts()).filter((a) => (a.game || "").toLowerCase().includes(rest));
+      const pages = accountsEmbeds(hits, `Accounts in "${rest}"`);
+      return pages.length ? { embeds: pages } : `No accounts in a game matching "${rest}".`;
+    }
+    case "account":
+    case "acc": {
+      if (!rest) return "Usage: `account <name>`";
+      const accts = await allAccounts();
+      const a = findAccount(accts, rest);
+      if (!a) return notFound(accts, rest);
+      return { embeds: [accountEmbed(accts, a.name)], components: [cardButtons(a.name)] };
+    }
+    case "join": {
+      if (!rest) return "Usage: `join <name>`";
+      const accts = await allAccounts();
+      const a = findAccount(accts, rest);
+      if (!a) return notFound(accts, rest);
+      return { embeds: [joinEmbed(accts, a.name)], components: [joinButtons(a.name)] };
+    }
+    case "compare":
+    case "vs": {
+      const [x, y] = rest.split(/\s+/);
+      if (!x || !y) return "Usage: `compare <name> <name>`";
+      const accts = await allAccounts();
+      const a = findAccount(accts, x),
+        b = findAccount(accts, y);
+      if (!a) return notFound(accts, x);
+      if (!b) return notFound(accts, y);
+      return { embeds: [compareEmbed(a, b)] };
+    }
+    case "top":
+    case "leaderboard":
+    case "lb": {
+      const metric = rest.includes("point") ? "points" : rest.includes("score") ? "score" : "wins";
+      const e = topEmbed(await allAccounts(), metric);
+      return e ? { embeds: [e] } : "No accounts reported yet.";
+    }
+    case "stats":
+    case "totals":
+      return { embeds: [statsEmbed(await allAccounts())] };
+    case "status":
+    case "ping":
+      return { embeds: [statusEmbed(await allAccounts())] };
+    case "prune": {
+      await pruneStale();
+      invalidateAccounts();
+      return { embeds: [statusEmbed(await allAccounts())] };
+    }
+    case "remove":
+    case "forget": {
+      if (!rest) return "Usage: `remove <exact name>`";
+      const accts = await allAccounts();
+      const a = accts.find((x) => x.name.toLowerCase() === rest); // exact only: never delete on a partial match
+      if (!a) return notFound(accts, rest) + " (`remove` needs the exact name.)";
+      const ok = await removeAccount(a.name);
+      invalidateAccounts();
+      return ok ? `Removed **${esc(a.name)}** from the roster.` : `Couldn't remove "${esc(a.name)}" (no DB, or request failed).`;
+    }
+    case "help":
+    case "commands":
+    case "?":
+      return { embeds: [helpEmbed()] };
+    case "hi":
+      return "bye";
+    case "meow":
+      return await catGif();
+    default:
+      return null;
+  }
+}
+
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot) return;
+  if (!isAdmin(msg)) return; // admins (and the owner) only
   const text = msg.content.trim().toLowerCase().replace(/^!\s*/, "").replace(/^catn\s+/, "");
   const word = text.split(/\s+/)[0] || "";
   const rest = text.slice(word.length).trim();
+  let reply;
   try {
-    if (word === "accounts" || word === "list") {
-      const e = accountsEmbed(await allAccounts());
-      await msg.channel.send(e ? { embeds: [e] } : "No farm accounts reported yet.");
-    } else if (word === "online") {
-      const e = accountsEmbed((await allAccounts()).filter((a) => a.online), "Accounts online now");
-      await msg.channel.send(e ? { embeds: [e] } : "No accounts are online right now.");
-    } else if (word === "games") {
-      const e = gamesEmbed(await allAccounts());
-      await msg.channel.send(e ? { embeds: [e] } : "No accounts are online right now.");
-    } else if (word === "search" || word === "find") {
-      if (!rest) return void (await msg.channel.send("Usage: `search <game name>`"));
-      const hits = (await allAccounts()).filter((a) => (a.game || "").toLowerCase().includes(rest));
-      const e = accountsEmbed(hits, `Accounts in "${rest}"`);
-      await msg.channel.send(e ? { embeds: [e] } : `No accounts in a game matching "${rest}".`);
-    } else if (word === "account" || word === "acc") {
-      if (!rest) return void (await msg.channel.send("Usage: `account <name>`"));
-      const e = accountEmbed(await allAccounts(), rest);
-      await msg.channel.send(e ? { embeds: [e] } : `No account matching "${rest}".`);
-    } else if (word === "join") {
-      if (!rest) return void (await msg.channel.send("Usage: `join <name>`"));
-      const e = joinEmbed(await allAccounts(), rest);
-      await msg.channel.send(e ? { embeds: [e] } : `No account matching "${rest}".`);
-    } else if (word === "top" || word === "leaderboard" || word === "lb") {
-      const e = topEmbed(await allAccounts());
-      await msg.channel.send(e ? { embeds: [e] } : "No accounts reported yet.");
-    } else if (word === "stats" || word === "totals") {
-      await msg.channel.send({ embeds: [statsEmbed(await allAccounts())] });
-    } else if (word === "help" || word === "commands" || word === "?") {
-      await msg.channel.send({ embeds: [HELP] });
-    } else if (word === "hi") {
-      await msg.channel.send("bye");
-    } else if (word === "meow") {
-      await msg.channel.send(await catGif());
-    }
+    reply = await handleCommand(word, rest);
+  } catch (e) {
+    console.error("command failed:", e.message);
+    reply = "Something went wrong running that — try again in a moment.";
+  }
+  if (!reply) return;
+  try {
+    if (typeof msg.channel.sendTyping === "function") msg.channel.sendTyping().catch(() => {});
+    await msg.channel.send(reply);
   } catch (e) {
     console.error("send failed:", e.message);
   }
 });
 
-client.login(TOKEN).catch((e) => {
-  console.error("Login failed. Check the token, and that Message Content Intent is on.", e.message);
-  process.exit(1);
+function interactionIsAdmin(i) {
+  if (!i.inGuild()) return false;
+  if (i.guild && i.guild.ownerId === i.user.id) return true;
+  return !!(i.memberPermissions && i.memberPermissions.has(PermissionsBitField.Flags.Administrator));
+}
+
+// Buttons: Refresh redraws the card in place, Join answers privately (only the clicker sees the script).
+client.on(Events.InteractionCreate, async (i) => {
+  if (!i.isButton()) return;
+  if (!interactionIsAdmin(i)) return void i.reply({ content: "Admins only.", ephemeral: true }).catch(() => {});
+  const cut = i.customId.indexOf(":");
+  const kind = i.customId.slice(0, cut),
+    name = i.customId.slice(cut + 1);
+  try {
+    const accts = await allAccounts(true); // buttons always show live data
+    const a = findAccount(accts, name);
+    if (kind === "acct") {
+      return void (await i.update(a ? { embeds: [accountEmbed(accts, a.name)], components: [cardButtons(a.name)] } : { content: `**${esc(name)}** isn't in the roster anymore.`, embeds: [], components: [] }));
+    }
+    if (kind === "join") {
+      return void (await i.reply(a ? { embeds: [joinEmbed(accts, a.name)], components: [joinButtons(a.name)], ephemeral: true } : { content: `**${esc(name)}** isn't in the roster anymore.`, ephemeral: true }));
+    }
+    if (kind === "joinr") {
+      return void (await i.update(a ? { embeds: [joinEmbed(accts, a.name)], components: [joinButtons(a.name)] } : { content: `**${esc(name)}** isn't in the roster anymore.`, embeds: [], components: [] }));
+    }
+  } catch (e) {
+    console.error("button failed:", e.message);
+    if (!i.replied && !i.deferred) i.reply({ content: "That didn't work — try again in a moment.", ephemeral: true }).catch(() => {});
+  }
 });
+
+// Stay up overnight: log instead of dying on a stray network error.
+client.on("error", (e) => console.error("client error:", e && e.message));
+process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e && e.message ? e.message : e));
+process.on("uncaughtException", (e) => console.error("uncaught exception:", e && e.message ? e.message : e));
+
+if (TEST) {
+  module.exports = {
+    abbrev, dur, esc, samePeers, accountsEmbed, accountsEmbeds, accountEmbed, topEmbed, statsEmbed, gamesEmbed, joinEmbed,
+    statusEmbed, isAdmin, interactionIsAdmin, handleCommand, brand, helpEmbed, findAccount, notFound, editDistance,
+    compareEmbed, cardButtons, joinButtons, mergeAccounts,
+  };
+} else {
+  client.login(TOKEN).catch((e) => {
+    console.error("Login failed. Check the token, and that Message Content Intent is on.", e.message);
+    process.exit(1);
+  });
+}
