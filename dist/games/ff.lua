@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.3.4",
+local window = BPUI:CreateWindow({Version = "1.3.5",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1012,8 +1012,14 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
     local mapFolder = workspace:WaitForChild("Map", 30)
     local stages = mapFolder and mapFolder:WaitForChild("Stages", 30)
     if not stages then
-        setStatus("the map didn't load, starting over")
-        if onStuck then onStuck("map not found") end
+        -- A hop sometimes lands in a server that never loads the world (just the red skybox + the player list).
+        -- Restarting here is pointless - the map will never appear - so rejoin a fresh server to escape it, and
+        -- keep trying (spaced out, to respect the teleport limit) in case the first rejoin also fails.
+        setStatus("the map didn't load, rejoining a fresh server")
+        while alive() do
+            pcall(function() TeleportService:Teleport(game.PlaceId, plr) end)
+            task.wait(15) -- if the teleport took us away this thread dies with the DataModel; otherwise try again
+        end
         return function() for _, c in ipairs(myConns) do pcall(function() c:Disconnect() end) end end
     end
     task.wait(2)
