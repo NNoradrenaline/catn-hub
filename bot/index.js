@@ -23,6 +23,7 @@ if (!TOKEN) {
 }
 
 const STATS_WEBHOOK = (process.env.STATS_WEBHOOK || "").trim();
+const FIREBASE = (process.env.FIREBASE_URL || "").trim().replace(/\/+$/, "");
 const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
 const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "workspace", "FFAutoFarm");
 const ONLINE_LOCAL = 60;
@@ -173,16 +174,52 @@ async function remoteAccounts() {
   return out;
 }
 
-// All accounts everywhere: remote (shared channel) with this PC's local files layered on top (fresher).
+// Every account in the Firebase DB (all machines) — one GET, no burial, no rate limit.
+async function firebaseAccounts() {
+  if (!FIREBASE) return {};
+  const out = {};
+  try {
+    const res = await fetch(FIREBASE + "/accounts.json");
+    if (!res.ok) return out;
+    const data = await res.json();
+    if (!data || typeof data !== "object") return out;
+    const now = Math.floor(Date.now() / 1000);
+    for (const d of Object.values(data)) {
+      if (!d || typeof d.n !== "string") continue;
+      const t = Number(d.t) || 0;
+      out[d.n] = {
+        name: d.n,
+        wins: Number(d.w) || 0,
+        points: Number(d.p) || 0,
+        totalScore: Number(d.ts) || 0,
+        scriptWins: Number(d.sw) || 0,
+        scriptScore: Number(d.s) || 0,
+        since: 0,
+        lastSeen: t,
+        online: now - t < ONLINE_REMOTE,
+        run: d.rt ? { wins: Number(d.rw) || 0, score: Number(d.rs) || 0, startedAt: Number(d.rt) || 0 } : null,
+        placeId: Number(d.pl) || 0,
+        jobId: typeof d.j === "string" ? d.j : "",
+      };
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return out;
+}
+
+// All accounts everywhere: channel (legacy) < Firebase (global) < this PC's local files (freshest), merged by name.
 async function allAccounts() {
   const byName = {};
-  const remote = await remoteAccounts();
-  for (const a of Object.values(remote)) byName[a.name.toLowerCase()] = a;
-  // Local files are fresher for stats, but keep the live placeId/jobId the channel reported.
-  for (const a of localAccounts()) {
-    const k = a.name.toLowerCase();
-    byName[k] = byName[k] ? { ...byName[k], ...a } : a;
-  }
+  const layer = (list) => {
+    for (const a of list) {
+      const k = a.name.toLowerCase();
+      byName[k] = byName[k] ? { ...byName[k], ...a } : a;
+    }
+  };
+  layer(Object.values(await remoteAccounts()));
+  layer(Object.values(await firebaseAccounts()));
+  layer(localAccounts());
   return Object.values(byName).sort((a, b) => b.wins - a.wins);
 }
 
@@ -326,7 +363,7 @@ const client = new Client({
 });
 
 client.once(Events.ClientReady, (c) =>
-  console.log("online as " + c.user.tag + " | stats: " + (STATS_WEBHOOK ? "shared" : "local only") + " | farm dir: " + FARM_DIR)
+  console.log("online as " + c.user.tag + " | db: " + (FIREBASE ? "firebase" : STATS_WEBHOOK ? "channel" : "local only") + " | farm dir: " + FARM_DIR)
 );
 
 client.on(Events.MessageCreate, async (msg) => {

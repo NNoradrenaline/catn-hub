@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.7.2",
+local window = BPUI:CreateWindow({Version = "1.8.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1819,9 +1819,12 @@ end})
 -- Posting to a webhook needs no bot token, so every user reports here with zero setup. Each account keeps ONE
 -- message it edits (id saved to disk), so the channel stays one line per account instead of filling up.
 local STATS_WEBHOOK = "https://discord.com/api/webhooks/1572814663328997406/P0LgC-184HItuVh1XFzmD87VaU8kId-e58K4pudYeN2XmRG8Vsxk7bvKbd8GXi4RmCpp"
+-- Firebase Realtime DB: one node per account (overwritten each cycle), so the bot reads everyone in one GET
+-- with no burial and no shared rate limit. Primary store; the webhook above is the fallback when this is blank.
+local STATS_DB = "https://catn-db-default-rtdb.firebaseio.com/"
 do
     local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-    if req and STATS_WEBHOOK ~= "" then
+    if req and (STATS_WEBHOOK ~= "" or STATS_DB ~= "") then
         local MSG_FILE = PAIR_FOLDER .. "/statmsg_" .. plr.Name .. ".json"
         local saved = pjson(MSG_FILE) or {}
         local msgId = saved.id
@@ -1843,11 +1846,11 @@ do
         end
         -- remember the last real values, so a tick where the board is mid-rebuild doesn't drop them to 0
         local realW, realP, realTS = tonumber(saved.w), tonumber(saved.p), tonumber(saved.ts)
-        local function body()
+        local function statData()
             realW = board("Wins") or realW or tonumber(lifetime.lastWins) or 0
             realP = board("Points") or realP or 0
             realTS = board("TotalScore") or realTS or 0
-            return HttpService:JSONEncode({content = "STAT " .. HttpService:JSONEncode({
+            return {
                 n = plr.Name,
                 w = math.floor(realW), -- real leaderboard wins
                 p = math.floor(realP), -- real points (the game's Points currency)
@@ -1860,26 +1863,33 @@ do
                 pl = game.PlaceId, -- so the bot can hand out a "join this server" script
                 j = game.JobId,
                 t = os.time(),
-            })})
+            }
         end
         task.spawn(function()
             while alive do
-                local payload = body()
-                local sent = false
-                if msgId then
-                    local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "/messages/" .. msgId, Method = "PATCH",
-                        Headers = {["Content-Type"] = "application/json"}, Body = payload})
-                    sent = ok and res and tonumber(res.StatusCode) ~= nil and res.StatusCode < 300
-                end
-                if not sent then -- no message yet, or it was deleted: post a fresh one and remember its id
-                    local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "?wait=true", Method = "POST",
-                        Headers = {["Content-Type"] = "application/json"}, Body = payload})
-                    if ok and res and res.Body then
-                        local good, m = pcall(function() return HttpService:JSONDecode(res.Body) end)
-                        if good and type(m) == "table" and m.id then msgId = m.id end
+                local data = statData()
+                if STATS_DB ~= "" then
+                    -- overwrite this account's own node; every active account visible in one bot GET, no rate wall
+                    pcall(req, {Url = STATS_DB .. "accounts/" .. plr.Name .. ".json", Method = "PUT",
+                        Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)})
+                else
+                    local payload = HttpService:JSONEncode({content = "STAT " .. HttpService:JSONEncode(data)})
+                    local sent = false
+                    if msgId then
+                        local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "/messages/" .. msgId, Method = "PATCH",
+                            Headers = {["Content-Type"] = "application/json"}, Body = payload})
+                        sent = ok and res and tonumber(res.StatusCode) ~= nil and res.StatusCode < 300
+                    end
+                    if not sent then -- no message yet, or it was deleted: post a fresh one and remember its id
+                        local ok, res = pcall(req, {Url = STATS_WEBHOOK .. "?wait=true", Method = "POST",
+                            Headers = {["Content-Type"] = "application/json"}, Body = payload})
+                        if ok and res and res.Body then
+                            local good, m = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                            if good and type(m) == "table" and m.id then msgId = m.id end
+                        end
                     end
                 end
-                -- keep the last real values + the live server on disk, so the bot can join local accounts without the channel
+                -- keep the last real values + the live server on disk, so the bot can join local accounts even offline
                 pwrite(MSG_FILE, {id = msgId, w = realW, p = realP, ts = realTS, j = game.JobId, pl = game.PlaceId})
                 task.wait(45) -- refresh often so the server id the bot hands out stays current across hops
             end
