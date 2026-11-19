@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.3.5",
+local window = BPUI:CreateWindow({Version = "1.4.0",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1811,12 +1811,13 @@ hookSec:AddButton({Name = "Reset score and win totals", ButtonText = "Reset", Ca
     window:Notify({Title = "Totals", Content = "Score and win totals are back to zero.", Type = "Success", Duration = 3})
 end})
 
--- ---------- Discord bot: read commands from the channel and drive the duo farm ----------
-task.spawn(function()
-    local API = "https://discord.com/api/v10"
-    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-    if not req then return end
-    local lastId, seeded, warnedAuth = nil, false, false
+-- ---------- Discord bot: online + instant commands over the gateway, REST polling as a fallback ----------
+local API = "https://discord.com/api/v10"
+local botReq = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+if botReq then
+    local req = botReq
+    local gatewayUp = false
+    local pollLastId, pollSeeded, warnedAuth = nil, false, false
     local function send(text)
         pcall(req, {Url = API .. "/channels/" .. botCfg.channel .. "/messages", Method = "POST",
             Headers = {["Content-Type"] = "application/json", ["Authorization"] = "Bot " .. botCfg.token},
@@ -1859,38 +1860,110 @@ task.spawn(function()
             pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId, plr) end)
         end
     end
-    while alive do
-        task.wait(1.2) -- poll fast so commands feel responsive
-        if botCfg.on and botCfg.token ~= "" and botCfg.channel:match("^%d+$") then
-            local url = API .. "/channels/" .. botCfg.channel .. "/messages?limit=" .. (lastId and ("10&after=" .. lastId) or "1")
-            local ok, res = pcall(req, {Url = url, Method = "GET", Headers = {["Authorization"] = "Bot " .. botCfg.token}})
-            local status = ok and res and res.StatusCode
-            if (status == 401 or status == 403) and not warnedAuth then
-                warnedAuth = true
-                pcall(function() window:Notify({Title = "Discord bot", Content = "Discord refused the token/permissions (" .. tostring(status) .. "). Check the token and that the bot can read and send in that channel.", Type = "Error", Duration = 6}) end)
-            elseif status == 200 and res.Body then
-                warnedAuth = false
-                local good, msgs = pcall(function() return HttpService:JSONDecode(res.Body) end)
-                if good and type(msgs) == "table" then
-                    -- Discord returns newest first; walk oldest->newest so lastId lands on the newest. The first poll only
-                    -- seeds lastId (skip old chat); later polls act on anything newer than lastId.
-                    for i = #msgs, 1, -1 do
-                        local m = msgs[i]
-                        if type(m) == "table" and m.id then
-                            lastId = m.id
-                            if seeded and not (m.author and m.author.bot) then
-                                apply(m.content)
+    -- Gateway: a WebSocket to Discord so the bot shows ONLINE and commands arrive instantly (no poll delay).
+    -- Each reconnect is a fresh login, so on a hopping farm it can hit Discord's daily gateway limit; the poll
+    -- loop below is the fallback and takes over whenever the gateway is down.
+    local wslib = (WebSocket or websocket)
+    if wslib then
+        task.spawn(function()
+            local GW = "wss://gateway.discord.gg/?v=10&encoding=json"
+            local INTENTS = 33280 -- GUILD_MESSAGES (512) + MESSAGE_CONTENT (32768)
+            local fails = 0
+            while alive do
+                if not (botCfg.on and botCfg.token ~= "" and botCfg.channel:match("^%d+$")) then
+                    gatewayUp = false
+                    task.wait(2)
+                else
+                    local ok, sock = pcall(function() return wslib.connect(GW) end)
+                    if not ok or not sock then
+                        gatewayUp = false
+                        fails = math.min(fails + 1, 12)
+                        task.wait(10 + fails * 5) -- can't connect; the poll loop covers commands meanwhile
+                    else
+                        local seq, hbMs, closed = nil, nil, false
+                        local msgConn = sock.OnMessage:Connect(function(raw)
+                            local good, p = pcall(function() return HttpService:JSONDecode(raw) end)
+                            if not good or type(p) ~= "table" then return end
+                            if p.s ~= nil then seq = p.s end
+                            local op = p.op
+                            if op == 10 then
+                                hbMs = p.d and tonumber(p.d.heartbeat_interval)
+                                pcall(function() sock:Send(HttpService:JSONEncode({op = 2, d = {
+                                    token = botCfg.token, intents = INTENTS,
+                                    properties = {os = "windows", browser = "catn", device = "catn"},
+                                    presence = {status = "online", afk = false, since = 0, activities = {}}}})) end)
+                                task.spawn(function()
+                                    while not closed do
+                                        task.wait((hbMs or 41250) / 1000)
+                                        if closed then break end
+                                        pcall(function() sock:Send(HttpService:JSONEncode({op = 1, d = seq})) end)
+                                    end
+                                end)
+                            elseif op == 1 then
+                                pcall(function() sock:Send(HttpService:JSONEncode({op = 1, d = seq})) end)
+                            elseif op == 7 or op == 9 then -- server asked us to reconnect / invalid session
+                                closed = true
+                                pcall(function() sock:Close() end)
+                            elseif op == 0 then
+                                if p.t == "READY" then gatewayUp = true; fails = 0 end
+                                if p.t == "MESSAGE_CREATE" and type(p.d) == "table"
+                                    and tostring(p.d.channel_id) == botCfg.channel
+                                    and not (p.d.author and p.d.author.bot) then
+                                    apply(p.d.content)
+                                end
                             end
-                        end
+                        end)
+                        local closeConn = sock.OnClose:Connect(function() closed = true end)
+                        while not closed and alive and botCfg.on and botCfg.token ~= "" do task.wait(0.5) end
+                        closed, gatewayUp = true, false
+                        pcall(function() msgConn:Disconnect() end)
+                        pcall(function() closeConn:Disconnect() end)
+                        pcall(function() sock:Close() end)
+                        task.wait(3) -- small gap before a fresh connect
                     end
-                    seeded = true
                 end
-            elseif status == 429 then
-                task.wait(5) -- rate limited: ease off before the next poll
+            end
+        end)
+    end
+
+    -- Poll fallback: the only path with no WebSocket, and the safety net when the gateway is down. It idles while
+    -- the gateway is up and re-seeds so it skips the backlog when it takes back over.
+    task.spawn(function()
+        while alive do
+            task.wait(1.2)
+            if botCfg.on and botCfg.token ~= "" and botCfg.channel:match("^%d+$") then
+                if gatewayUp then
+                    pollSeeded = false
+                else
+                    local url = API .. "/channels/" .. botCfg.channel .. "/messages?limit=" .. (pollLastId and ("10&after=" .. pollLastId) or "1")
+                    local ok, res = pcall(req, {Url = url, Method = "GET", Headers = {["Authorization"] = "Bot " .. botCfg.token}})
+                    local status = ok and res and res.StatusCode
+                    if (status == 401 or status == 403) and not warnedAuth then
+                        warnedAuth = true
+                        pcall(function() window:Notify({Title = "Discord bot", Content = "Discord refused the token/permissions (" .. tostring(status) .. "). Check the token and that the bot can read and send in that channel.", Type = "Error", Duration = 6}) end)
+                    elseif status == 200 and res.Body then
+                        warnedAuth = false
+                        local good, msgs = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                        if good and type(msgs) == "table" then
+                            for i = #msgs, 1, -1 do
+                                local m = msgs[i]
+                                if type(m) == "table" and m.id then
+                                    pollLastId = m.id
+                                    if pollSeeded and not (m.author and m.author.bot) then
+                                        apply(m.content)
+                                    end
+                                end
+                            end
+                            pollSeeded = true
+                        end
+                    elseif status == 429 then
+                        task.wait(5) -- rate limited: ease off before the next poll
+                    end
+                end
             end
         end
-    end
-end)
+    end)
+end
 
 -- reads "1,234", "12.5K", "3M" off the leaderboard
 local function parseCount(t)
