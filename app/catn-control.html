@@ -213,6 +213,31 @@ html.desk .login::before { content: ""; position: fixed; top: 0; left: 0; right:
 .fe-txt { flex: 1; color: var(--sub); }
 .fe-txt b { color: var(--text); font-weight: 500; }
 .fe-t { color: var(--muted); font-size: 11px; white-space: nowrap; margin-top: 1px; }
+
+.pal-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.5); backdrop-filter: blur(3px); z-index: 40; display: grid; place-items: start center; padding-top: 12vh; }
+.pal { width: min(560px, 92vw); background: var(--panel); border: 1px solid var(--stroke2); border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.pal input { width: 100%; border: 0; border-bottom: 1px solid var(--stroke); background: none; color: var(--text); padding: 16px 18px; font-size: 16px; outline: none; }
+.pal-list { max-height: 50vh; overflow: auto; padding: 6px; }
+.pal-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 14px; color: var(--sub); }
+.pal-item.on { background: var(--hover); color: var(--text); }
+.pal-item b { color: var(--text); font-weight: 500; }
+.pal-item .k { margin-left: auto; font-size: 11px; color: var(--muted); border: 1px solid var(--stroke2); border-radius: 5px; padding: 1px 6px; }
+.lb-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--stroke); }
+.lb-row:first-child { border-top: 0; }
+.lb-rank { width: 28px; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 600; }
+.lb-row.top .lb-rank { color: var(--accent); }
+.lb-nm { font-weight: 500; }
+.lb-v { font-variant-numeric: tabular-nums; color: var(--text); }
+.lb-bar { height: 4px; background: var(--accent); border-radius: 2px; margin-top: 5px; opacity: .8; }
+.tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; font-size: 12px; }
+.tag { display: inline-flex; align-items: center; gap: 5px; background: var(--el); border: 1px solid var(--stroke2); border-radius: 999px; padding: 3px 10px; color: var(--sub); }
+.tag.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.tag .x { cursor: pointer; opacity: .6; }
+.tag .x:hover { opacity: 1; }
+.tag-add { width: 84px; background: none; border: 1px dashed var(--stroke2); border-radius: 999px; padding: 3px 10px; color: var(--sub); outline: none; }
+.swatches { display: flex; gap: 6px; }
+.sw-t { width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.sw-t.on { border-color: var(--text); }
 @media (max-width: 860px) {
   .home-grid { grid-template-columns: 1fr; } .feedwrap { position: static; }
   .app { grid-template-columns: 1fr; }
@@ -237,6 +262,7 @@ html.desk .login::before { content: ""; position: fixed; top: 0; left: 0; right:
 </div>
 <div class="toasts" id="toasts"></div>
 <div id="login"></div>
+<div id="palette"></div>
 
 <script src="core.js"></script>
 <script>
@@ -260,6 +286,7 @@ const ICON = {
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>',
   sync: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>',
+  medal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>',
   hop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
   join: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>',
 };
@@ -267,8 +294,12 @@ const ICON = {
 // ---------- state ----------
 const store = { accounts: {}, menus: {}, acks: {}, boards: null };
 const orders = new Map(); // order id -> {acct, op, window, id, kind, value, t, state, msg, doneAt}
-const ui = { view: "home", acct: null, win: null, tab: null, q: "", sel: new Set(), also: new Set(), listen: null };
+const ui = { view: "home", acct: null, win: null, tab: null, q: "", sel: new Set(), also: new Set(), listen: null, filter: null, lbMetric: "w" };
 let pins = lsGet("catn.pins", {}); // acct key -> ["window\u0001id", ...]
+let tags = lsGet("catn.tags", {});     // acct key -> [tag, ...]
+let scenes = lsGet("catn.scenes", {}); // window key -> { name: [{id,kind,value}, ...] }
+let notifyOn = lsGet("catn.notify", false);
+let themeName = lsGet("catn.theme", "Tabby");
 let auth = lsGet("catn.auth", null); // {apiKey, refresh, uid, email}
 let idToken = null, idExp = 0, conn = "connecting";
 
@@ -433,12 +464,13 @@ function pulse() {
     const p = snap[key];
     if (p) {
       const d = cur.wins - p.wins;
+      if (d > 0 && Math.floor(cur.wins / 1000) > Math.floor(p.wins / 1000)) notifyUser(shown(key) + " passed " + fmt(Math.floor(cur.wins / 1000) * 1000) + " wins", "");
       if (d > 0) pushFeed('win', key, d > 1 ? 'won ' + d + ' rounds' : 'won a round');
       if (cur.online && !p.online) pushFeed('on', key, 'came online');
       if (!cur.online && p.online) pushFeed('off', key, 'went offline');
       if (cur.running && !p.running) pushFeed('start', key, 'started a script');
       if (!cur.running && p.running) pushFeed('stop', key, 'script stopped');
-      if (p.running && !cur.running && cur.online) attention.add(key);
+      if (p.running && !cur.running && cur.online && !attention.has(key)) { attention.add(key); notifyUser(shown(key) + " needs attention", "its script stopped while still online"); }
       if (cur.running || !cur.online) attention.delete(key);
     }
     snap[key] = cur;
@@ -461,6 +493,76 @@ function feedPanel() {
       : `<div class="dim" style="padding:14px">Quiet so far. Wins, hops and your changes show up here as they happen.</div>`
   }</div></aside>`;
 }
+
+// ---------- themes, command palette, leaderboard, scenes, notifications ----------
+const THEMES = {
+  Obsidian: { bg: [10,10,10], side: [13,13,13], panel: [21,21,21], el: [16,16,16], hover: [26,26,26], stroke: [36,36,36], text: [236,234,230], sub: [150,148,144], muted: [100,98,95], accent: [232,228,220] },
+  Tabby:    { bg: [22,15,12], side: [27,18,14], panel: [40,27,21], el: [33,22,17], hover: [58,39,29], stroke: [96,62,44], text: [252,238,224], sub: [222,188,160], muted: [158,124,100], accent: [234,160,108] },
+  Slate:    { bg: [9,11,15], side: [12,14,19], panel: [20,24,32], el: [16,19,26], hover: [24,28,38], stroke: [33,39,52], text: [232,236,244], sub: [140,150,170], muted: [92,102,122], accent: [86,150,220] },
+  Warm:     { bg: [12,11,10], side: [15,14,13], panel: [26,24,22], el: [21,19,18], hover: [30,28,26], stroke: [42,39,36], text: [240,236,230], sub: [158,150,140], muted: [108,101,93], accent: [232,150,84] },
+  Wave:     { bg: [7,13,30], side: [9,17,38], panel: [14,27,56], el: [12,24,52], hover: [22,42,82], stroke: [38,72,136], text: [236,243,255], sub: [156,178,218], muted: [98,120,166], accent: [72,156,255] },
+  Holly:    { bg: [9,17,27], side: [11,21,32], panel: [20,33,46], el: [15,26,37], hover: [28,45,60], stroke: [42,63,80], text: [242,247,252], sub: [162,182,198], muted: [106,126,142], accent: [228,56,70] },
+};
+function applyTheme(name) {
+  const T = THEMES[name] || THEMES.Tabby, r = document.documentElement.style;
+  const rgb = (a) => `rgb(${a[0]},${a[1]},${a[2]})`, lift = (a, d) => [Math.min(255, a[0]+d), Math.min(255, a[1]+d), Math.min(255, a[2]+d)];
+  r.setProperty("--bg", rgb(T.bg)); r.setProperty("--side", rgb(T.side)); r.setProperty("--panel", rgb(T.panel));
+  r.setProperty("--el", rgb(T.el)); r.setProperty("--hover", rgb(T.hover)); r.setProperty("--stroke", rgb(T.stroke));
+  r.setProperty("--stroke2", rgb(lift(T.stroke, 14))); r.setProperty("--text", rgb(T.text));
+  r.setProperty("--sub", rgb(T.sub)); r.setProperty("--muted", rgb(T.muted));
+  const [ar, ag, ab] = T.accent;
+  r.setProperty("--accent", `rgb(${ar},${ag},${ab})`);
+  r.setProperty("--accent-soft", `rgba(${ar},${ag},${ab},.15)`);
+  r.setProperty("--accent-ink", (0.299*ar + 0.587*ag + 0.114*ab) > 150 ? "#1b1205" : "#ffffff");
+  themeName = name; lsSet("catn.theme", name);
+}
+
+const pal = { open: false, q: "", i: 0 };
+function palItems() {
+  const acts = [
+    { label: "Overview", sub: "go", run: () => { ui.view = "home"; ui.q = ""; schedule(); } },
+    { label: "Leaderboard", sub: "go", run: () => { ui.view = "leaderboard"; schedule(); } },
+    { label: "Global boards", sub: "go", run: () => { ui.view = "boards"; schedule(); } },
+    { label: "Refresh now", sub: "action", run: refresh },
+    { label: "Rejoin all online", sub: "action", run: () => { const ks = linked().filter((l) => l.online).map((l) => l.key); sendMany(ks, { op: "rejoin" }); } },
+    { label: "Hop all online", sub: "action", run: () => { const ks = linked().filter((l) => l.online).map((l) => l.key); if (ks.length && confirm("Hop all " + ks.length + " online accounts?")) sendMany(ks, { op: "hop" }); } },
+  ];
+  const accts = linked().map((l) => ({ label: shown(l.key), sub: (l.a && l.a.g) || "account", run: () => { ui.view = "acct"; ui.acct = l.key; ui.win = null; ui.tab = null; ui.q = ""; ui.also.clear(); schedule(); } }));
+  const q = pal.q.trim().toLowerCase(), all = acts.concat(accts);
+  return q ? all.filter((x) => (x.label + " " + x.sub).toLowerCase().includes(q)) : all;
+}
+function renderPalette() {
+  const host = document.getElementById("palette");
+  if (!pal.open) { host.innerHTML = ""; return; }
+  const items = palItems();
+  if (pal.i >= items.length) pal.i = Math.max(0, items.length - 1);
+  host.innerHTML = `<div class="pal-wrap"><div class="pal">` +
+    `<input id="palq" placeholder="Search accounts and actions…" value="${esc(pal.q)}" autocomplete="off" spellcheck="false">` +
+    `<div class="pal-list">${items.map((x, k) => `<div class="pal-item ${k === pal.i ? "on" : ""}" data-palrun="${k}"><b>${esc(x.label)}</b><span class="dim">${esc(x.sub)}</span>${k === pal.i ? `<span class="k">↵</span>` : ""}</div>`).join("") || `<div class="pal-item">No matches</div>`}</div></div></div>`;
+  const q = host.querySelector("#palq"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+function openPal() { pal.open = true; pal.q = ""; pal.i = 0; renderPalette(); }
+function closePal() { pal.open = false; renderPalette(); }
+function runPal(k) { const items = palItems(); if (items[k]) { closePal(); items[k].run(); } }
+
+function viewLeaderboard() {
+  const metric = ui.lbMetric || "w", names = { w: "Wins", rw: "Run wins", p: "Points" };
+  const rows = linked().map((l) => ({ key: l.key, v: Number((l.a || {})[metric]) || 0 })).sort((x, y) => y.v - x.v);
+  const max = rows.length ? (rows[0].v || 1) : 1;
+  return `<div class="wrap"><div class="head"><div class="grow"><h1>Leaderboard</h1><p>Your accounts, ranked.</p></div>` +
+    `<div class="seg">${["w","rw","p"].map((m) => `<button class="${m === metric ? "on" : ""}" data-lb="${m}">${names[m]}</button>`).join("")}</div></div>` +
+    `<div class="section">${rows.length ? rows.map((x, i) => `<div class="lb-row ${i < 3 ? "top" : ""}"><span class="lb-rank">${i + 1}</span><div style="flex:1;min-width:0"><div class="lb-nm">${esc(shown(x.key))}</div><div class="lb-bar" style="width:${Math.max(3, x.v / max * 100)}%"></div></div><span class="lb-v">${fmt(x.v)}</span></div>`).join("") : `<div class="lb-row">No accounts yet.</div>`}</div></div>`;
+}
+
+function winValues(acct, win) {
+  const w = ((store.menus || {})[acct] || {})[win] || {};
+  const lay = w.layout ? (Array.isArray(w.layout) ? w.layout : Object.values(w.layout)) : [], out = [];
+  for (const c of lay) if (["Toggle","Slider","Dropdown","Input","Keybind","ColorPicker"].includes(c.kind) && (w.v || {})[c.id] !== undefined) out.push({ id: c.id, kind: c.kind, value: w.v[c.id] });
+  return out;
+}
+function applyValues(acct, win, entries) { for (const e of entries) send(acct, { op: "set", window: win, id: e.id, kind: e.kind, value: e.value }); }
+function notifyUser(title, body) { try { if (notifyOn && typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(title, { body }); } catch (e) {} }
+
 // ---------- render ----------
 let queued = false, held = false;
 function schedule() { if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; render(); }); } }
@@ -474,7 +576,7 @@ function render() {
   held = false;
   const main = $("#main"), top = main.scrollTop;
   const fe = main.querySelector(".feed"), feTop = fe ? fe.scrollTop : 0;
-  main.innerHTML = ui.view === "acct" && ui.acct ? viewAccount() : ui.view === "boards" ? viewBoards() : viewHome();
+  main.innerHTML = ui.view === "acct" && ui.acct ? viewAccount() : ui.view === "boards" ? viewBoards() : ui.view === "leaderboard" ? viewLeaderboard() : viewHome();
   main.scrollTop = top;
   const fe2 = main.querySelector(".feed"); if (fe2) fe2.scrollTop = feTop;
 }
@@ -483,12 +585,15 @@ document.addEventListener("focusout", () => setTimeout(() => { if (held) render(
 function renderSide() {
   $("#nav").innerHTML =
     `<button class="${ui.view === "home" ? "on" : ""}" data-go="home">${ICON.home}Overview</button>` +
+    `<button class="${ui.view === "leaderboard" ? "on" : ""}" data-go="leaderboard">${ICON.medal}Leaderboard</button>` +
     `<button class="${ui.view === "boards" ? "on" : ""}" data-go="boards">${ICON.trophy}Global boards</button>`;
   $("#accts").innerHTML = linked().map((l) =>
     `<button class="acct-link ${ui.view === "acct" && ui.acct === l.key ? "on" : ""}" data-open="${esc(l.key)}"><span class="dot ${l.online ? "on" : ""}"></span><span class="nm">${esc(shown(l.key))}</span><span class="dim mono">${l.wins.filter((w) => w.alive).length || ""}</span></button>`
   ).join("") || `<div class="dim" style="padding:6px 10px;font-size:12px">No accounts linked yet</div>`;
   $("#foot").innerHTML =
     `<div class="conn"><span class="dot ${conn === "live" ? "on" : ""}"></span>${conn === "live" ? "Live" : conn === "reconnecting" ? "Reconnecting…" : "Connecting…"}</div>` +
+    `<div class="swatches">${Object.keys(THEMES).map((t) => `<button class="sw-t ${t === themeName ? "on" : ""}" data-theme="${t}" title="${t}" style="background:rgb(${THEMES[t].accent.join(",")})"></button>`).join("")}</div>` +
+    `<div class="dim"><button class="linkbtn" data-notify>${notifyOn ? "🔔 Alerts on" : "🔕 Alerts off"}</button></div>` +
     (DEMO ? `<div class="dim">Demo data</div>` : auth ? `<div class="dim">${esc(auth.email || "")} · <button class="linkbtn" data-signout>Sign out</button></div>` : "");
 }
 
@@ -500,6 +605,8 @@ function viewHome() {
   const wins = L.reduce((n, l) => n + (Number(l.a && l.a.w) || 0), 0);
   const sel = [...ui.sel].filter((k) => L.some((l) => l.key === k));
   const stalled = [...attention].filter((k) => L.some((l) => l.key === k));
+  const tagU = [...new Set(L.flatMap((l) => tags[l.key] || []))].sort();
+  const Lf = ui.filter ? L.filter((l) => (tags[l.key] || []).includes(ui.filter)) : L;
   return `<div class="wrap">
     <div class="head"><div class="grow"><h1>Overview</h1><p>Everything your accounts are running, live.</p></div>
       <button class="btn ghost ${refreshing ? "busy" : ""}" data-refresh title="Pull a fresh snapshot now">${ICON.sync}Refresh</button>
@@ -512,6 +619,7 @@ function viewHome() {
     <div class="fleetbar"><b>Fleet</b><span class="dim">${online} online \u00b7 ${running} running</span><span class="grow"></span>
       <button class="btn sm" data-fleet="rejoin">${ICON.refresh}Rejoin all</button>
       <button class="btn sm" data-fleet="hop">${ICON.hop}Hop all</button></div>
+    ${tagU.length ? `<div class="tags"><button class="tag ${!ui.filter ? "on" : ""}" data-filter="">All</button>${tagU.map((t) => `<button class="tag ${ui.filter === t ? "on" : ""}" data-filter="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
     <div class="stats">
       <div class="stat"><small>Linked accounts</small><b>${L.length}</b></div>
       <div class="stat"><small>Online</small><b>${online}</b></div>
@@ -519,7 +627,7 @@ function viewHome() {
       <div class="stat"><small>Wins (all accounts)</small><b>${fmt(wins)}</b></div>
       <div class="stat"><small>Wins / min</small><b>${winsPerMin().toFixed(1)}</b></div>
     </div>
-    <div class="home-grid"><div class="cards">${L.map(card).join("")}</div>${feedPanel()}</div></div>`;
+    <div class="home-grid"><div class="cards">${Lf.length ? Lf.map(card).join("") : `<div class="empty"><p>No accounts with that tag.</p></div>`}</div>${feedPanel()}</div></div>`;
 }
 function card(l) {
   const a = l.a || {}, alive = l.wins.filter((w) => w.alive);
@@ -568,6 +676,7 @@ function viewAccount() {
     return rows ? `<div class="section">${s.name || q ? `<h3>${esc(q ? t.tab + (s.name ? " · " + s.name : "") : s.name)}</h3>` : ""}${rows}</div>` : "";
   }).join("")).join("");
   const join = joinUrl(a);
+  const sceneNames = Object.keys(scenes[cur.key] || {});
   return `<div class="wrap">
     <div class="head"><div class="grow"><h1>${esc(shown(key))}</h1>
       <p>${esc(a.g || "Not in a game")}${a.t ? " · seen " + ago(a.t) : ""} · ${cur.alive ? '<span style="color:var(--ok)">script running</span>' : '<span class="dim">script not running</span>'}</p></div>
@@ -575,12 +684,14 @@ function viewAccount() {
       <button class="btn" data-op="rejoin" data-acct="${esc(key)}">${ICON.refresh}Rejoin</button>
       <button class="btn" data-op="hop" data-acct="${esc(key)}">${ICON.hop}Hop server</button>
       ${join ? `<a class="btn" href="${esc(join)}">${ICON.join}Join</a>` : ""}</div>
+    <div class="tags"><span class="dim">Tags</span>${(tags[key] || []).map((t) => `<span class="tag on">${esc(t)}<span class="x" data-untag="${esc(t)}">×</span></span>`).join("")}<input class="tag-add" id="tagadd" placeholder="+ add" data-tagfor="${esc(key)}" autocomplete="off"></div>
     ${wins.length > 1 ? `<div class="toolbar"><div class="seg">${wins.map((w) => `<button class="${w.key === ui.win ? "on" : ""}" data-win="${esc(w.key)}">${esc(w.title)}${w.alive ? "" : " (closed)"}</button>`).join("")}</div></div>` : ""}
     <div class="toolbar">
       <div class="seg">${tabs.map((t) => `<button class="${!q && t.key === ui.tab ? "on" : ""}" data-tab="${esc(t.key)}">${esc(t.tab)}</button>`).join("")}</div>
       <input class="search" id="q" placeholder="Search every setting in ${esc(cur.title)}…" value="${esc(ui.q)}">
     </div>
     ${others.length ? `<div class="also">Also apply changes to:${others.map((l) => `<button class="${ui.also.has(l.key) ? "on" : ""}" data-also="${esc(l.key)}">${esc(shown(l.key))}</button>`).join("")}</div>` : ""}
+    <div class="toolbar" style="margin-bottom:16px"><button class="btn sm" data-copyto title="Copy this window\u2019s settings onto the ticked accounts">${ICON.sync}Copy to ticked</button><button class="btn sm ghost" data-savescene>Save as scene</button>${sceneNames.length ? `<select class="field" data-applyscene><option value="">Apply a scene…</option>${sceneNames.map((sn) => `<option>${esc(sn)}</option>`).join("")}</select>` : ""}</div>
     ${body ? `<div class="sections">${body}</div>` : `<div class="empty"><p>Nothing matches “${esc(ui.q)}”.</p></div>`}</div>`;
 }
 
@@ -657,6 +768,9 @@ function setFrom(el, value) {
   sendMany(targets(acct), { op: "set", window: w, id, kind, value });
 }
 document.addEventListener("click", (e) => {
+  const palHit = e.target.closest("[data-palrun]");
+  if (palHit) { runPal(+palHit.dataset.palrun); return; }
+  if (e.target.classList && e.target.classList.contains("pal-wrap")) { closePal(); return; }
   const t = e.target.closest("button, a");
   if (!t) return;
   const ds = t.dataset;
@@ -672,6 +786,13 @@ document.addEventListener("click", (e) => {
   else if (ds.bulk) { sendMany([...ui.sel], { op: ds.bulk }); }
   else if (ds.fleet) { const ks = linked().filter((l) => l.online).map((l) => l.key); if (ks.length && (ds.fleet === "rejoin" || confirm("Hop all " + ks.length + " online accounts to new servers?"))) sendMany(ks, { op: ds.fleet }); }
   else if (ds.rejoinkeys) sendMany(ds.rejoinkeys.split("\u0001"), { op: "rejoin" });
+  else if (ds.lb) { ui.lbMetric = ds.lb; schedule(); }
+  else if (t.hasAttribute("data-filter")) { ui.filter = ds.filter || null; schedule(); }
+  else if (ds.untag) { const k = ui.acct; tags[k] = (tags[k] || []).filter((x) => x !== ds.untag); lsSet("catn.tags", tags); schedule(); }
+  else if (ds.theme) { applyTheme(ds.theme); renderSide(); schedule(); }
+  else if (t.hasAttribute("data-notify")) { if (!notifyOn && typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission(); notifyOn = !notifyOn; lsSet("catn.notify", notifyOn); renderSide(); }
+  else if (t.hasAttribute("data-copyto")) { const ent = winValues(ui.acct, ui.win), tg = [...ui.also]; if (!tg.length) toast("Tick some accounts first", "Use \u201cAlso apply changes to\u201d above, then Copy."); else { tg.forEach((x) => applyValues(x, ui.win, ent)); toast("Copied " + ent.length + " settings to " + tg.length + " account(s)", null, true); } }
+  else if (t.hasAttribute("data-savescene")) { const nm = (prompt("Name this scene:") || "").trim(); if (nm) { scenes[ui.win] = scenes[ui.win] || {}; scenes[ui.win][nm] = winValues(ui.acct, ui.win); lsSet("catn.scenes", scenes); toast("Saved scene \u201c" + nm + "\u201d", null, true); schedule(); } }
   else if (ds.op) { send(ds.acct, { op: ds.op }); }
   else if (t.hasAttribute("data-signout")) signOut();
   else if (t.hasAttribute("data-pin")) {
@@ -691,6 +812,7 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("change", (e) => {
   const el = e.target;
+  if (el.hasAttribute("data-applyscene")) { const nm = el.value, sc = nm && (scenes[ui.win] || {})[nm]; if (sc) { applyValues(ui.acct, ui.win, sc); [...ui.also].forEach((x) => applyValues(x, ui.win, sc)); toast("Applied scene \u201c" + nm + "\u201d", null, true); } el.value = ""; return; }
   if (!el.matches("[data-set]")) return;
   if (el.type === "range" || el.type === "number") { const n = Number(el.value); if (Number.isFinite(n)) setFrom(el, n); }
   else if (el.tagName === "SELECT" || el.type === "color") setFrom(el, el.value);
@@ -698,10 +820,21 @@ document.addEventListener("change", (e) => {
 });
 document.addEventListener("input", (e) => {
   const el = e.target;
+  if (el.id === "palq") { pal.q = el.value; pal.i = 0; renderPalette(); return; }
   if (el.id === "q") { ui.q = el.value; const pos = el.selectionStart; render(); const q = $("#q"); if (q) { q.focus(); q.setSelectionRange(pos, pos); } }
   else if (el.type === "range") { const num = el.parentElement.querySelector(".num"); if (num) num.value = el.value; }
 });
 document.addEventListener("keydown", (e) => {
+  if ((e.key === "k" || e.key === "K") && (e.ctrlKey || e.metaKey)) { e.preventDefault(); pal.open ? closePal() : openPal(); return; }
+  if (pal.open) {
+    const items = palItems();
+    if (e.key === "Escape") { e.preventDefault(); closePal(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); pal.i = Math.min(items.length - 1, pal.i + 1); renderPalette(); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); pal.i = Math.max(0, pal.i - 1); renderPalette(); return; }
+    if (e.key === "Enter") { e.preventDefault(); runPal(pal.i); return; }
+    return;
+  }
+  if (e.key === "Enter" && e.target.id === "tagadd") { const k = e.target.dataset.tagfor, v = e.target.value.trim(); if (v) { tags[k] = [...new Set([...(tags[k] || []), v])]; lsSet("catn.tags", tags); } e.target.value = ""; e.target.blur(); schedule(); return; }
   if (ui.listen) {
     e.preventDefault();
     const l = ui.listen; ui.listen = null;
@@ -791,6 +924,7 @@ function loadDemo() {
 // ---------- start ----------
 if (DEMO) loadDemo();
 else { stream("accounts", "accounts"); stream("menus", "menus"); stream("acks", "acks"); stream("boards/ff", "boards"); }
+applyTheme(themeName);
 renderLogin();
 render();
 pulse(); setInterval(pulse, 2000); // derive the activity feed and fleet health
