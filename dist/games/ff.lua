@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.2",
+local window = BPUI:CreateWindow({Version = "1.8.3",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -995,7 +995,9 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
     local VISITED_TTL, MAX_VISITED, HOP_ENTRY_MAX_AGE = 600, 50, 120
     local GRACE_LEADER, GRACE_FOLLOWER = 2, 5
     local STAGE_CHECK_START, STAGE_CHECK_INTERVAL, STAGE_MISSES_TO_HOP = 8, 1, 3
-    local CLAIM_MAX_AGE, TP_START_DELAY, ALT_WAIT, VERIFY_TIMEOUT = 60, 3, 20, 15
+    -- after a hop the other account can take a while to load in: hold the pad instead of hopping away from it
+    local CLAIM_MAX_AGE, TP_START_DELAY, ALT_WAIT, VERIFY_TIMEOUT = 60, 3, 60, 75
+    local PARTNER_GONE_HOP, SPLIT_HOP, SETTLE = 45, 10, 3 -- seconds: partner missing / on another stage / together before voting
     local READY_RETRY = 5 -- seconds to wait for the ready-up to register before pressing again
     local LEADER_SIDE, FOLLOWER_SIDE = "Left", "Right" -- swap if the winner sits on the wrong side
 
@@ -1336,10 +1338,12 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
         while alive() and task.wait(0.1) do
             if isHopping then break end
             local s = selFrame()
-            if s and s.Visible == false and workspace:FindFirstChild(plr.Name) then
+            -- never while we're already on a stage: pressing E there gets us off the pad again
+            if s and s.Visible == false and workspace:FindFirstChild(plr.Name) and not stageOfPlayer(plr.Name) then
                 VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
                 task.wait(0.1)
                 VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+                task.wait(0.4)
             end
         end
     end)
@@ -1352,6 +1356,7 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
             while os.clock() < deadline and alive() do
                 if isHopping then return end
                 if bothOnSameStage() then setStatus("both accounts are on the same stage") return end
+                if not stageOfPlayer(partnerName) then setStatus("on the pad, holding it until the other account gets here") end
                 task.wait(1)
             end
             if alive() then
@@ -1421,24 +1426,19 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
 
     -- 4. partner left, or a stranger joined our stage
     supervise("partner check", function()
-        task.wait(15)
+        local goneSince, splitSince
         while alive() and task.wait(2) do
             if isHopping then break end
-            if not Players:FindFirstChild(partnerName) then serverHop() break end
-            if not workspace:FindFirstChild(plr.Name) then
-                for _, stage in stages:GetChildren() do
-                    local workspaces = stage:FindFirstChild("Workspaces")
-                    if workspaces and #workspaces:GetChildren() > 2 then
-                        local left, right = workspaces:FindFirstChild("Left_1"), workspaces:FindFirstChild("Right_1")
-                        if left and right then
-                            local p1InLeft, p2InLeft = left:FindFirstChild(PLAYER_1, true), left:FindFirstChild(PLAYER_2, true)
-                            local p1InRight, p2InRight = right:FindFirstChild(PLAYER_1, true), right:FindFirstChild(PLAYER_2, true)
-                            local hasP1, hasP2 = p1InLeft or p1InRight, p2InLeft or p2InRight
-                            local bothTogether = (p1InLeft and p2InRight) or (p2InLeft and p1InRight)
-                            if not bothTogether and (hasP1 or hasP2) then serverHop() break end
-                        end
-                    end
-                end
+            -- partner gone for a while (a hop target can take a bit to load into) -> leave too
+            if Players:FindFirstChild(partnerName) then goneSince = nil else goneSince = goneSince or os.clock() end
+            if goneSince and os.clock() - goneSince >= PARTNER_GONE_HOP then serverHop() break end
+            -- both seated but on different stages -> this server is a bust. One alone on a stage is just waiting.
+            local mine, theirs = stageOfPlayer(plr.Name), stageOfPlayer(partnerName)
+            if mine and theirs and mine ~= theirs then splitSince = splitSince or os.clock() else splitSince = nil end
+            if splitSince and os.clock() - splitSince >= SPLIT_HOP then
+                setStatus("accounts are on different stages, hopping")
+                serverHop()
+                break
             end
         end
     end)
@@ -1448,23 +1448,28 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
     supervise("ready up", function()
         local lastPress = -math.huge
         local lastTried = -math.huge
+        local togetherSince, fixes = nil, 0
         while alive() and not isHopping do
             task.wait(0.5)
             local sel, frame = selFrame()
             if not (sel and sel.Visible) then
-                lastPress, lastTried = -math.huge, -math.huge -- song started / selector closed: fresh round next time
+                lastPress, lastTried, fixes = -math.huge, -math.huge, 0 -- song started / selector closed: fresh round next time
             else
                 -- "Play Solo" on the button means the game still sees one player
                 local bothHere = bothOnSameStage() ~= nil and frame.Bottom.Play.PlaySong.Label.Text ~= "Play Solo"
+                if bothHere then togetherSince = togetherSince or os.clock() else togetherSince = nil end
                 if intruder then
                     setStatus("not readying up, " .. intruder .. " is on our stage")
                 elseif not bothHere then
-                    setStatus("waiting for the other account to join the stage")
+                    setStatus("on the pad, waiting for the other account to join the stage")
+                elseif os.clock() - togetherSince < SETTLE then
+                    setStatus("both on the stage, settling before the vote")
                 else
                     local choosing = stillChoosing(sel)
                     if choosing == false then
                         local voted, want = myRowValue(sel, "Chart"), wantedChart()
-                        if want and voted and voted ~= want and os.clock() - lastPress > 3 then
+                        if want and voted and voted ~= want and os.clock() - lastPress > 3 and fixes < 2 then -- at most 2 fixes a round, never a ready/unready loop
+                            fixes += 1
                             -- we readied up on the wrong difficulty: press play again to un-ready, the retry below re-picks
                             clickBtn(frame.Bottom.Play.PlaySong)
                             lastPress = os.clock()
@@ -1474,7 +1479,6 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
                             setStatus("readied up, waiting for the other account")
                         end
                     elseif os.clock() - lastTried > READY_RETRY and choosing == true then -- only when our row actually shows "Choosing..."; never press blind while the row flickers in/out as both accounts settle on a stage
-                        task.wait(1.5) -- let both accounts settle before voting
                         if bothOnSameStage() and stillChoosing(sel) ~= false and not intruder
                             and #strangersOnStage(ourStage()) == 0 then -- checked again right before we vote
                             lastTried = os.clock()
