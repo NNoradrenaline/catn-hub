@@ -3640,6 +3640,8 @@ end
 
 local session = {started = os.clock(), gold = 0, kills = 0, deaths = 0, damage = 0}
 state.Session = session
+local runEnv = getgenv and getgenv() or _G
+runEnv.CatnRun = {n = 0, label = "kills"} -- Catn Control: "+N kills this run"
 do
     local function track(valueObject, key)
         if not valueObject or not valueObject:IsA("ValueBase") then return end
@@ -3649,6 +3651,7 @@ do
             if value > last then
                 session[key] = session[key] + (value - last)
                 session[key .. "At"] = os.clock()
+                if key == "kills" then runEnv.CatnRun.n = session.kills end
             end
             last = value
         end)
@@ -3665,6 +3668,7 @@ do
     end)
     session.Reset = function()
         session.started, session.gold, session.kills, session.deaths, session.damage = os.clock(), 0, 0, 0, 0
+        runEnv.CatnRun.n = 0
     end
 end
 
@@ -5726,7 +5730,7 @@ end
 local presetToggles = {}
 
 local created, result = pcall(function()
-    return BPUI:CreateWindow({Version = "1.15.3",
+    return BPUI:CreateWindow({Version = "1.15.4",
         Title = "Catn Hub", Subtitle = "Anime Battle Arena",
         Icon = "zap", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
         ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BPHubABA",

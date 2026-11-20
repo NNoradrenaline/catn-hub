@@ -6,6 +6,7 @@ local plr = Players.LocalPlayer
 while not plr do task.wait() plr = Players.LocalPlayer end
 
 local genv = getgenv and getgenv() or _G
+genv.CatnRun = {n = 0, label = "songs"} -- Catn Control: "+N songs this run"
 if genv.__BFNF_AUTOPLAY and genv.__BFNF_AUTOPLAY.Destroy then
     pcall(genv.__BFNF_AUTOPLAY.Destroy)
 end
@@ -139,6 +140,7 @@ local function songEnded()
         timing.hits, c.perfect, c.sick, c.good + c.okay + c.bad, timing.total / timing.hits, timing.worst)
     table.insert(songLog, 1, line)
     if #songLog > 8 then table.remove(songLog) end
+    genv.CatnRun.n = (genv.CatnRun.n or 0) + 1
     timing = newTiming()
 
     local catnBus = getgenv and getgenv().CatnBus
@@ -556,7 +558,7 @@ table.insert(conns, RunService.RenderStepped:Connect(function(dt)
     end
 end))
 
-local window = BPUI:CreateWindow({Version = "1.1.0",
+local window = BPUI:CreateWindow({Version = "1.1.1",
     Title = "Basically FNF", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(236, 112, 160),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "BFNFAutoplay",

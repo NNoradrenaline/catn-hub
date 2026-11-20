@@ -4763,7 +4763,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.17.2"
+local HUB_VERSION = "1.17.3"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -4774,14 +4774,14 @@ local GAMES = {
         Name = "Anime Battle Arena",
         Key = "aba",
         Icon = "swords",
-        Version = "1.15.3",
+        Version = "1.15.4",
         Detect = function() return game.GameId == 578392296 or game.PlaceId == 1458767429 end,
     },
     {
         Name = "Basically FNF: Remix",
         Key = "bfnf",
         Icon = "music",
-        Version = "1.1.0",
+        Version = "1.1.1",
         Detect = function()
             if game.PlaceId == 6520999642 then return true end
             local gui = plr:FindFirstChild("PlayerGui")
@@ -5329,10 +5329,13 @@ do
             local hopping = false
             local function push(state)
                 local live = state == "in"
-                local body = HttpService:JSONEncode({
+                local data = {
                     n = me.Name, pl = game.PlaceId, j = live and game.JobId or "", st = state,
                     u = game.GameId, g = gname, t = os.time(), v = os.time(),
-                })
+                }
+                local run = env.CatnRun
+                if type(run) == "table" and type(run.n) == "number" then data.rn = run.n data.rl = type(run.label) == "string" and run.label or nil end
+                local body = HttpService:JSONEncode(data)
                 pcall(req, {Url = url, Method = "PATCH", Headers = {["Content-Type"] = "application/json"}, Body = body})
             end
             pcall(function()

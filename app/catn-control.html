@@ -448,7 +448,7 @@ const joinUrl = (a) => a && a.pl ? "roblox://experiences/start?placeId=" + a.pl 
 // ---------- live activity feed + fleet health (all derived from the live streams) ----------
 const feed = [];            // newest first
 const snap = {};            // last seen per account, for diffing
-const attention = new Set();// accounts whose script stalled while online
+const attention = new Map(); // key -> why it stalled
 const winHist = [];         // [{t, total}] for the wins/min rate
 function pushFeed(kind, acct, text) {
   feed.unshift({ kind, acct, text, t: Date.now() });
@@ -459,7 +459,7 @@ function pulse() {
   let total = 0;
   for (const l of linked()) {
     const key = l.key, a = l.a || {};
-    const cur = { wins: Number(a.w) || 0, online: l.online, running: l.wins.some((w) => w.alive) };
+    const cur = { wins: Number(a.w) || 0, online: l.online, running: l.wins.some((w) => w.alive), game: a.pl || 0 };
     total += cur.wins;
     const p = snap[key];
     if (p) {
@@ -469,8 +469,11 @@ function pulse() {
       if (cur.online && !p.online) pushFeed('on', key, 'came online');
       if (!cur.online && p.online) pushFeed('off', key, 'went offline');
       if (cur.running && !p.running) pushFeed('start', key, 'started a script');
-      if (!cur.running && p.running) pushFeed('stop', key, 'script stopped');
-      if (p.running && !cur.running && cur.online && !attention.has(key)) { attention.add(key); notifyUser(shown(key) + " needs attention", "its script stopped while still online"); }
+      if (!cur.running && p.running) {
+        const why = cur.game !== p.game ? "it switched to another game" : !cur.online ? "the account went offline (disconnected or Roblox closed)" : "it stopped updating — likely crashed, was unloaded, or the round reset";
+        pushFeed("stop", key, "script stopped — " + why);
+        if (cur.online && cur.game === p.game) { attention.set(key, why); notifyUser(shown(key) + " stopped", why); }
+      }
       if (cur.running || !cur.online) attention.delete(key);
     }
     snap[key] = cur;
@@ -604,7 +607,7 @@ function viewHome() {
   const running = L.reduce((n, l) => n + l.wins.filter((w) => w.alive).length, 0);
   const wins = L.reduce((n, l) => n + (Number(l.a && l.a.w) || 0), 0);
   const sel = [...ui.sel].filter((k) => L.some((l) => l.key === k));
-  const stalled = [...attention].filter((k) => L.some((l) => l.key === k));
+  const stalled = [...attention.keys()].filter((k) => L.some((l) => l.key === k));
   const tagU = [...new Set(L.flatMap((l) => tags[l.key] || []))].sort();
   const Lf = ui.filter ? L.filter((l) => (tags[l.key] || []).includes(ui.filter)) : L;
   return `<div class="wrap">
@@ -615,7 +618,7 @@ function viewHome() {
       <button class="btn sm" data-bulk="rejoin">${ICON.refresh}Rejoin</button>
       <button class="btn sm" data-bulk="hop">${ICON.hop}Hop</button>
       <button class="btn sm ghost" data-clearsel>Clear</button></div>` : ""}
-    ${stalled.length ? `<div class="alert"><b>&#9888; ${stalled.length} need${stalled.length > 1 ? "" : "s"} attention</b><span>${stalled.map((k) => esc(shown(k))).join(", ")} \u2014 script stopped while still online</span><button class="btn sm" data-rejoinkeys="${esc(stalled.join("\u0001"))}">${ICON.refresh}Rejoin them</button></div>` : ""}
+    ${stalled.length ? `<div class="alert"><b>&#9888; ${stalled.length} need${stalled.length > 1 ? "" : "s"} attention</b><span>${stalled.map((k) => esc(shown(k)) + " \u2014 " + esc(attention.get(k) || "stopped")).join("; ")}</span><button class="btn sm" data-rejoinkeys="${esc(stalled.join("\u0001"))}">${ICON.refresh}Rejoin them</button></div>` : ""}
     <div class="fleetbar"><b>Fleet</b><span class="dim">${online} online \u00b7 ${running} running</span><span class="grow"></span>
       <button class="btn sm" data-fleet="rejoin">${ICON.refresh}Rejoin all</button>
       <button class="btn sm" data-fleet="hop">${ICON.hop}Hop all</button></div>
@@ -651,6 +654,7 @@ function card(l) {
       <span class="pill ${l.online ? "on" : ""}">${l.online ? "Online" : "Offline"}</span></div>
     ${status ? `<div class="status-line">${esc(status)}</div>` : ""}
     ${(a.w != null || a.p != null) ? `<div class="kv"><div><small>Wins</small><b>${fmt(a.w)}</b></div><div><small>Points</small><b>${fmt(a.p)}</b></div><div title="wins the script has farmed since it started"><small>This run</small><b>${a.sw != null ? "+" + fmt(a.sw) : "–"}</b></div></div>` : ""}
+    ${(a.w == null && a.p == null && a.rn != null) ? `<div class="kv"><div title="farmed since the script started"><small>This run</small><b>+${fmt(a.rn)}${a.rl ? " " + esc(a.rl) : ""}</b></div></div>` : ""}
     <div class="chips">${l.wins.map((w) => `<span class="pill ${w.alive ? "acc" : ""}">${esc(w.title)}</span>`).join("")}</div>
     ${myPins ? `<div class="pins">${myPins}</div>` : ""}
     <div class="card-actions">
@@ -685,7 +689,7 @@ function viewAccount() {
   const sceneNames = Object.keys(scenes[cur.key] || {});
   return `<div class="wrap">
     <div class="head"><div class="grow"><h1>${esc(shown(key))}</h1>
-      <p>${esc(gameName(a))}${a.t ? " · seen " + ago(a.t) : ""} · ${cur.alive ? '<span style="color:var(--ok)">script running</span>' : '<span class="dim">script not running</span>'}${(a.w != null || a.p != null) ? ` · ${fmt(a.w)} wins · ${fmt(a.p)} pts · +${fmt(a.sw || 0)} this run` : ""}</p></div>
+      <p>${esc(gameName(a))}${a.t ? " · seen " + ago(a.t) : ""} · ${cur.alive ? '<span style="color:var(--ok)">script running</span>' : '<span class="dim">script not running</span>'}${(a.w != null || a.p != null) ? ` · ${fmt(a.w)} wins · ${fmt(a.p)} pts · +${fmt(a.sw || 0)} this run` : ""}${(a.w == null && a.p == null && a.rn != null) ? ` · +${fmt(a.rn)}${a.rl ? " " + esc(a.rl) : ""} this run` : ""}</p></div>
       <button class="btn ghost ${refreshing ? "busy" : ""}" data-refresh title="Pull a fresh snapshot now">${ICON.sync}Refresh</button>
       <button class="btn" data-op="rejoin" data-acct="${esc(key)}">${ICON.refresh}Rejoin</button>
       <button class="btn" data-op="hop" data-acct="${esc(key)}">${ICON.hop}Hop server</button>
@@ -916,12 +920,12 @@ function loadDemo() {
   store.accounts = {
     catnba: { n: "catnba", g: "Funky Friday", w: 1832, p: 51244, t: s - 12, st: "in", pl: 6447798030, j: "x", rt: s - 3600, rw: 41 },
     getcatnhb: { n: "getcatnhb", g: "Funky Friday", w: 1790, p: 49810, t: s - 20, st: "in", pl: 6447798030, j: "x", rt: s - 3600, rw: 40 },
-    tabbyfarm: { n: "tabbyfarm", g: "Anime Battle Arena", w: 12, p: 0, t: s - 4000, st: "left" },
+    tabbyfarm: { n: "tabbyfarm", g: "ABA", pl: 1458767429, rn: 540, rl: "kills", t: s - 8, st: "in" },
   };
   store.menus = {
     catnba: { "Funky Friday": { title: "Funky Friday", t: now - 5000, layout: ff, v: v(true, "on the pad, holding it until the other account gets here") }, "Catn Hub": { title: "Catn Hub", t: now - 8000, layout: [{ id: "hub_hop", kind: "Toggle", name: "Smart server hop", tab: "Hub", section: "Servers" }], v: { hub_hop: false } } },
     getcatnhb: { "Funky Friday": { title: "Funky Friday", t: now - 3000, layout: ff, v: v(true, "round 14 · losing on purpose") } },
-    tabbyfarm: { "Anime Battle Arena": { title: "Anime Battle Arena", t: now - 4000000, layout: [{ id: "aba_farm", kind: "Toggle", name: "Auto farm", tab: "Farm", section: "" }], v: { aba_farm: false } } },
+    tabbyfarm: { "Anime Battle Arena": { title: "Anime Battle Arena", t: now - 5000, layout: [{ id: "aba_status", kind: "Label", name: "state", tab: "Farm", section: "" }, { id: "aba_farm", kind: "Toggle", name: "Auto farm", tab: "Farm", section: "" }], v: { aba_status: "farming — 3 bots down", aba_farm: true } } },
   };
   store.boards = { t: s - 300, boards: { WeeklyWins: { title: "Weekly Wins", rows: [{ r: 1, n: "someone", v: "4,210" }, { r: 2, n: "catnba", v: "3,980" }, { r: 3, n: "getcatnhb", v: "3,911" }] }, WeeklyScore: { title: "Weekly Score", rows: [{ r: 1, n: "player9", v: "92M" }] } } };
   conn = "live";
