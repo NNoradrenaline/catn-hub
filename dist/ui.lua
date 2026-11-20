@@ -5875,6 +5875,9 @@ function Window:_settingsTab()
         Callback = function(v) self.SceneOn = v == true U.sceneSync() end})
     menu:Toggle({Name = "Show what's on", Desc = "A small on-screen list of every switch that's on, with its key", Default = false, Flag = "vanta_active_list",
         Callback = function(v) self.ShowActive = v == true U.refreshActive() end})
+    menu:Toggle({Name = "Allow Catn Control", Desc = "Lets the Catn Control app see and change this script's settings. Only the owner's login can send it orders. Applies to every account on this PC.",
+        Default = (function() local ok, v = pcall(function() return isfile("catn_control_on") and readfile("catn_control_on") end) return ok and v == "1" end)(),
+        Callback = function(v) pcall(writefile, "catn_control_on", v and "1" or "0") end})
     menu:Button({Name = "Reset window position", Desc = "Forgets where you dragged it and picks a free spot again", ButtonText = "Reset",
         Callback = function() self:ResetPosition() end})
     menu:Keybind({Name = "Menu key", Desc = "Shows and hides this window", Default = self.Key, KeyboardOnly = true,
@@ -5895,6 +5898,218 @@ return (function(...)
 local Vanta = ...
 local BPUI = {}
 local lastWindow
+
+-- Catn Control: mirrors every window's controls to the owner's app and applies the app's orders.
+-- Off unless this PC opted in (Settings > Allow Catn Control). Only the owner's login can write orders (DB rules).
+local Remote
+do
+    local HttpService = game:GetService("HttpService")
+    local Players = game:GetService("Players")
+    local DB = "https://catn-db-default-rtdb.firebaseio.com/"
+    local okEnv, env = pcall(function() return getgenv and getgenv() or _G end)
+    env = okEnv and env or _G
+    Remote = env.CatnRemote
+    if type(Remote) ~= "table" or Remote.ver ~= 1 then
+        Remote = {ver = 1, wins = {}, done = {}, start = DateTime.now().UnixTimestampMillis}
+        env.CatnRemote = Remote
+    end
+
+    local function req(o)
+        local f = (syn and syn.request) or (http and http.request) or http_request or request or (fluxus and fluxus.request)
+        if not f then return nil end
+        local ok, r = pcall(f, o)
+        return ok and r or nil
+    end
+    local function send(path, body, method)
+        local r = req({Url = DB .. path .. ".json", Method = method or "PUT", Headers = {["Content-Type"] = "application/json"},
+            Body = body ~= nil and HttpService:JSONEncode(body) or nil})
+        return r and (r.StatusCode or 0) < 300
+    end
+    function Remote.key(s)
+        s = tostring(s or ""):gsub("/", "|"):gsub("[%.%$#%[%]]", "_")
+        return s == "" and "_" or s
+    end
+    function Remote.on()
+        local ok, v = pcall(function() return isfile("catn_control_on") and readfile("catn_control_on") end)
+        return ok and v == "1"
+    end
+    local function me() return Remote.key(Players.LocalPlayer.Name) end
+
+    -- orders still to run, oldest first: newer than this script's start (so a hop or rejoin never replays),
+    -- at most 60 s old, and not run before
+    function Remote.pick(orders, start, now, done)
+        local out = {}
+        for id, o in pairs(type(orders) == "table" and orders or {}) do
+            if type(o) == "table" and type(o.t) == "number" and o.t >= start and now - o.t <= 60000 and not done[id] then
+                table.insert(out, {id, o})
+            end
+        end
+        table.sort(out, function(a, b) return a[2].t < b[2].t end)
+        return out
+    end
+    do
+        local got = Remote.pick({a = {t = 900}, b = {t = 2000}, c = {t = 1500}, d = "x", e = {t = 3000}}, 1000, 5000, {c = true})
+        assert(#got == 2 and got[1][1] == "b" and got[2][1] == "e", "Remote.pick order")
+        assert(#Remote.pick({a = {t = 1000}}, 0, 70001, {}) == 0, "Remote.pick age")
+    end
+
+    local function enc(v)
+        if typeof(v) == "EnumItem" then return v.Name end
+        if typeof(v) == "Color3" then return "#" .. v:ToHex() end
+        if type(v) == "table" then
+            local out = {}
+            for _, x in ipairs(v) do table.insert(out, tostring(x)) end
+            return out
+        end
+        if v == nil or type(v) == "number" or type(v) == "boolean" or type(v) == "string" then return v end
+        return tostring(v)
+    end
+    local function value(c)
+        if c.kind == "Paragraph" then return c.text end
+        if not c.obj.Get then return nil end
+        local ok, v = pcall(c.obj.Get, c.obj)
+        if ok then return enc(v) end
+    end
+    Remote.value = value
+
+    local function apply(c, o)
+        if o.op == "press" then
+            if c.kind ~= "Button" or type(c.cb) ~= "function" then return false, "not a button" end
+            local ok, e = pcall(c.cb)
+            return ok, not ok and tostring(e) or nil
+        end
+        if o.op ~= "set" then return false, "unknown order" end
+        local v, k = o.value, c.kind
+        if k == "Toggle" then v = v == true
+        elseif k == "Slider" then
+            v = tonumber(v)
+            if not v then return false, "not a number" end
+            if (c.min and v < c.min) or (c.max and v > c.max) then return false, "out of range" end
+        elseif k == "Dropdown" then
+            local opts = type(c.options) == "table" and c.options or {}
+            local function has(x)
+                if #opts == 0 then return true end
+                for _, y in ipairs(opts) do if tostring(y) == tostring(x) then return true end end
+            end
+            for _, x in ipairs(type(v) == "table" and v or {v}) do
+                if not has(x) then return false, "not an option: " .. tostring(x) end
+            end
+        elseif k == "Keybind" then
+            local ok, kc = pcall(function() return Enum.KeyCode[tostring(v)] end)
+            if not ok or not kc then return false, "unknown key: " .. tostring(v) end
+            v = kc
+        elseif k == "ColorPicker" then
+            local ok, col = pcall(Color3.fromHex, tostring(v))
+            if not ok then return false, "not a colour: " .. tostring(v) end
+            v = col
+        elseif k == "Input" then v = tostring(v == nil and "" or v)
+        else return false, "can't be changed" end
+        local ok, e = pcall(c.obj.Set, c.obj, v)
+        if not ok then return false, tostring(e) end
+        return true, nil, value(c)
+    end
+
+    local function publish(w)
+        local ctl, base = w._ctl, "menus/" .. me() .. "/" .. w._key
+        if ctl.dirty then
+            local layout = {}
+            for i, c in ipairs(ctl.list) do
+                layout[i] = {id = c.id, kind = c.kind, name = c.name, tab = c.tab, section = c.section, desc = c.desc,
+                    options = c.options, min = c.min, max = c.max, step = c.step, multi = c.multi}
+            end
+            ctl.dirty = false
+            if not send(base .. "/layout", layout) then ctl.dirty = true end
+        end
+        local v = {}
+        for _, c in ipairs(ctl.list) do v[c.id] = value(c) end
+        local js = HttpService:JSONEncode(v)
+        if js ~= ctl.last or os.clock() - (ctl.lastT or 0) > 30 then
+            if send(base, {v = v, title = w._title, t = {[".sv"] = "timestamp"}}, "PATCH") then ctl.last, ctl.lastT = js, os.clock() end
+        end
+    end
+
+    local function run(o)
+        if o.op == "rejoin" or o.op == "hop" then return true end
+        for _, w in ipairs(Remote.wins) do
+            if w._key == o.window then
+                local c = w._ctl.by[tostring(o.id)]
+                if not c then return false, "control not found" end
+                return apply(c, o)
+            end
+        end
+        return false, "window not open"
+    end
+
+    local function tick()
+        if not Remote.on() then return end
+        for _, w in ipairs(Remote.wins) do pcall(publish, w) end
+        local r = req({Url = DB .. "orders/" .. me() .. ".json", Method = "GET"})
+        local ok, orders = pcall(function() return HttpService:JSONDecode(r.Body) end)
+        if not ok then return end
+        for _, pair in ipairs(Remote.pick(orders, Remote.start, DateTime.now().UnixTimestampMillis, Remote.done)) do
+            local id, o = pair[1], pair[2]
+            Remote.done[id] = true
+            local okRun, good, err, v = pcall(run, o)
+            if not okRun then good, err = false, tostring(good) end
+            send("acks/" .. me() .. "/" .. id, {ok = good == true, err = err, value = v, t = {[".sv"] = "timestamp"}})
+            if good and (o.op == "rejoin" or o.op == "hop") then
+                local TS, lp = game:GetService("TeleportService"), Players.LocalPlayer
+                if o.op == "rejoin" then TS:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp) else TS:Teleport(game.PlaceId, lp) end
+                return
+            end
+        end
+    end
+
+    function Remote.add(win, title)
+        win._ctl, win._title = {list = {}, by = {}, dirty = true}, tostring(title or "Window")
+        local base, n = Remote.key(win._title), 1
+        local function taken(k) for _, w in ipairs(Remote.wins) do if w._key == k then return true end end end
+        while taken(n > 1 and (base .. "_" .. n) or base) do n = n + 1 end
+        win._key = n > 1 and (base .. "_" .. n) or base
+        table.insert(Remote.wins, win)
+        if not Remote.running then
+            Remote.running = true
+            task.spawn(function() while true do task.wait(2) pcall(tick) end end)
+        end
+    end
+    function Remote.remove(win)
+        for i, w in ipairs(Remote.wins) do
+            if w == win then
+                table.remove(Remote.wins, i)
+                if Remote.on() then task.spawn(send, "menus/" .. me() .. "/" .. win._key, nil, "DELETE") end
+                return
+            end
+        end
+    end
+end
+
+-- records a control so the app can show and change it
+local function reg(sec, kind, o, obj)
+    local win = sec.win
+    if not (win and win._ctl) or type(obj) ~= "table" then return obj end
+    o = type(o) == "table" and o or {Text = o}
+    local name = tostring(o.Name or o.Title or o.Text or kind)
+    local ctl = win._ctl
+    local base = Remote.key(o.Flag or ((sec.tab or "") .. "/" .. (sec.name or "") .. "/" .. name))
+    local id, n = base, 1
+    while ctl.by[id] do n = n + 1 id = base .. "_" .. n end
+    local c = {id = id, kind = kind, name = name, tab = sec.tab, section = sec.name, desc = o.Desc or o.Description,
+        options = o.Options or o.Values, min = o.Min, max = o.Max, step = o.Step or o.Increment, multi = o.Multi == true,
+        obj = obj, cb = o.Callback}
+    if kind == "Paragraph" then
+        c.text = o.Content or o.Text
+        local set = obj.Set
+        obj.Set = function(self, t, ...) c.text = tostring(t) return set(self, t, ...) end
+    end
+    if kind == "Dropdown" and obj.Refresh then
+        local refresh = obj.Refresh
+        obj.Refresh = function(self, opts, ...) c.options = opts ctl.dirty = true return refresh(self, opts, ...) end
+    end
+    table.insert(ctl.list, c)
+    ctl.by[id] = c
+    ctl.dirty = true
+    return obj
+end
 
 local function convert(o)
     o = o or {}
@@ -5922,23 +6137,23 @@ local function plain(o)
     return out
 end
 
-function Section:AddToggle(o) return alias(self.v:Toggle(plain(o))) end
-function Section:AddSlider(o) return alias(self.v:Slider(plain(o))) end
-function Section:AddDropdown(o) return alias(self.v:Dropdown(plain(o))) end
-function Section:AddKeybind(o) return alias(self.v:Keybind(plain(o))) end
-function Section:AddButton(o) return alias(self.v:Button(plain(o))) end
-function Section:AddInput(o) return alias(self.v:Input(plain(o))) end
-function Section:AddTextbox(o) return alias(self.v:Input(plain(o))) end
-function Section:AddColorPicker(o) return alias(self.v:ColorPicker(plain(o))) end
-function Section:AddProgress(o) return alias(self.v:Progress(plain(o))) end
+function Section:AddToggle(o) return alias(reg(self, "Toggle", o, self.v:Toggle(plain(o)))) end
+function Section:AddSlider(o) return alias(reg(self, "Slider", o, self.v:Slider(plain(o)))) end
+function Section:AddDropdown(o) return alias(reg(self, "Dropdown", o, self.v:Dropdown(plain(o)))) end
+function Section:AddKeybind(o) return alias(reg(self, "Keybind", o, self.v:Keybind(plain(o)))) end
+function Section:AddButton(o) return alias(reg(self, "Button", o, self.v:Button(plain(o)))) end
+function Section:AddInput(o) return alias(reg(self, "Input", o, self.v:Input(plain(o)))) end
+function Section:AddTextbox(o) return alias(reg(self, "Input", o, self.v:Input(plain(o)))) end
+function Section:AddColorPicker(o) return alias(reg(self, "ColorPicker", o, self.v:ColorPicker(plain(o)))) end
+function Section:AddProgress(o) return alias(reg(self, "Progress", o, self.v:Progress(plain(o)))) end
 function Section:AddDivider() return self.v:Divider() end
 function Section:AddLabel(o)
     if type(o) == "string" then o = {Text = o} end
-    return alias(self.v:Label(o or {}))
+    return alias(reg(self, "Label", o, self.v:Label(o or {})))
 end
 function Section:AddParagraph(o)
     o = o or {}
-    return alias(self.v:Paragraph({Title = o.Title or o.Name, Content = o.Content or o.Text}))
+    return alias(reg(self, "Paragraph", o, self.v:Paragraph({Title = o.Title or o.Name, Content = o.Content or o.Text})))
 end
 
 local Tab = {}
@@ -5947,13 +6162,13 @@ Tab.__index = Tab
 function Tab:CreateSection(o, extra)
     local name = type(o) == "table" and (o.Name or o.Title) or o
     local opts = type(o) == "table" and o or extra or {}
-    return setmetatable({v = self.v:Section(name, {Collapsed = opts.Collapsed == true})}, Section)
+    return setmetatable({v = self.v:Section(name, {Collapsed = opts.Collapsed == true}), win = self.Window, tab = self.Name, name = name}, Section)
 end
 
 local Window = {}
 
-local function wrapTab(win, vtab)
-    local t = setmetatable({v = vtab, Window = win}, Tab)
+local function wrapTab(win, vtab, name)
+    local t = setmetatable({v = vtab, Window = win, Name = name}, Tab)
     win._tabs[vtab] = t
     return t
 end
@@ -5966,7 +6181,7 @@ end
 
 function Window:CreateTab(o)
     if type(o) == "string" then o = {Name = o} end
-    return wrapTab(self, self.v:Tab(convert(o)))
+    return wrapTab(self, self.v:Tab(convert(o)), o.Name or o.Title)
 end
 
 function Window:CreateGroup(o)
@@ -5976,7 +6191,7 @@ function Window:CreateGroup(o)
     return {
         CreateTab = function(_, t)
             if type(t) == "string" then t = {Name = t} end
-            return wrapTab(win, group:Tab(convert(t)))
+            return wrapTab(win, group:Tab(convert(t)), t.Name or t.Title)
         end,
         SetOpen = function(_, v) group:SetOpen(v) end,
     }
@@ -6010,6 +6225,7 @@ function BPUI:CreateWindow(o)
         OnDestroy = function()
             if o.OnDestroy then o.OnDestroy() end
             if BPUI.WindowGone then BPUI.WindowGone(gone) end
+            if gone and gone._bp then Remote.remove(gone._bp) end
         end,
         Settings = o.ShowSettings ~= false,
         Size = o.Size,
@@ -6022,6 +6238,8 @@ function BPUI:CreateWindow(o)
     local win = setmetatable({v = v, _tabs = {}}, Window)
     gone = v
     table.insert(BPUI.Windows, v)
+    v._bp = win
+    Remote.add(win, o.Title)
     lastWindow = win
     return win
 end
