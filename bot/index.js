@@ -44,6 +44,28 @@ let BOT_ICON = ""; // set to the bot's own avatar on ready, so every card is bra
 
 const STATS_WEBHOOK = (process.env.STATS_WEBHOOK || "").trim();
 const FIREBASE = (process.env.FIREBASE_URL || "").trim().replace(/\/+$/, "");
+// Optional Firebase login for the bot. Set FB_EMAIL + FB_PASSWORD once the DB rules lock reads to
+// signed-in users; without them the bot reads with no auth (open rules). The key is public.
+const FB_API_KEY = (process.env.FB_API_KEY || "AIzaSyAziLliiJqmMbi8okNuTwB4l_D8V6-8SRc").trim();
+let fbTok = null, fbExp = 0;
+async function fbToken() {
+  const email = (process.env.FB_EMAIL || "").trim(), pw = process.env.FB_PASSWORD || "";
+  if (!email || !pw) return null;
+  if (fbTok && Date.now() < fbExp - 300000) return fbTok;
+  try {
+    const r = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + encodeURIComponent(FB_API_KEY),
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password: pw, returnSecureToken: true }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { console.error("[firebase] bot sign-in failed:", j.error && j.error.message); return null; }
+    fbTok = j.idToken; fbExp = Date.now() + Number(j.expiresIn || 3600) * 1000;
+    return fbTok;
+  } catch (e) { console.error("[firebase] bot sign-in error:", e.message); return null; }
+}
+async function fbFetch(subpath, opts) {
+  const tok = await fbToken();
+  const url = FIREBASE + subpath + (tok ? (subpath.includes("?") ? "&" : "?") + "auth=" + encodeURIComponent(tok) : "");
+  return fetch(url, opts);
+}
 const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
 const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "workspace", "FFAutoFarm");
 const ONLINE_LOCAL = 60;
@@ -209,7 +231,7 @@ async function firebaseAccounts() {
   if (!FIREBASE) return {};
   const out = {};
   try {
-    const res = await fetch(FIREBASE + "/accounts.json");
+    const res = await fbFetch("/accounts.json");
     if (!res.ok) return out;
     const data = await res.json();
     if (!data || typeof data !== "object") return out;
@@ -480,14 +502,14 @@ function gamesEmbed(accts) {
 async function pruneStale() {
   if (!FIREBASE) return;
   try {
-    const res = await fetch(FIREBASE + "/accounts.json");
+    const res = await fbFetch("/accounts.json");
     if (!res.ok) return;
     const data = await res.json();
     if (!data || typeof data !== "object") return;
     const cutoff = Math.floor(Date.now() / 1000) - PRUNE_AGE;
     for (const [key, d] of Object.entries(data)) {
       if (!d || (Number(d.t) || 0) < cutoff) {
-        await fetch(FIREBASE + "/accounts/" + encodeURIComponent(key) + ".json", { method: "DELETE" });
+        await fbFetch("/accounts/" + encodeURIComponent(key) + ".json", { method: "DELETE" });
       }
     }
   } catch (e) {
@@ -514,7 +536,7 @@ function topEmbed(accts, metric) {
 async function globalBoards() {
   if (!FIREBASE) return null;
   try {
-    const res = await fetch(FIREBASE + "/boards/ff.json");
+    const res = await fbFetch("/boards/ff.json");
     const d = res.ok ? await res.json() : null;
     if (!d || !d.boards || typeof d.boards !== "object") return null;
     const boards = Object.values(d.boards).filter((b) => b && b.title && Array.isArray(b.rows));
@@ -590,7 +612,7 @@ function isAdmin(msg) {
 async function removeAccount(name) {
   if (!FIREBASE) return false;
   try {
-    const res = await fetch(FIREBASE + "/accounts/" + encodeURIComponent(name) + ".json", { method: "DELETE" });
+    const res = await fbFetch("/accounts/" + encodeURIComponent(name) + ".json", { method: "DELETE" });
     return res.ok;
   } catch (e) {
     return false;
