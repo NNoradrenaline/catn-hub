@@ -5875,7 +5875,6 @@ function Window:_settingsTab()
         Callback = function(v) self.SceneOn = v == true U.sceneSync() end})
     menu:Toggle({Name = "Show what's on", Desc = "A small on-screen list of every switch that's on, with its key", Default = false, Flag = "vanta_active_list",
         Callback = function(v) self.ShowActive = v == true U.refreshActive() end})
-    menu:Label("Catn Control is on: the hub owner can see and change this script's settings remotely.")
     menu:Button({Name = "Reset window position", Desc = "Forgets where you dragged it and picks a free spot again", ButtonText = "Reset",
         Callback = function() self:ResetPosition() end})
     menu:Keybind({Name = "Menu key", Desc = "Shows and hides this window", Default = self.Key, KeyboardOnly = true,
