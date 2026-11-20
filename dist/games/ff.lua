@@ -22,7 +22,7 @@ local env = getgenv and getgenv() or _G
 if env.__FF_WORKER then pcall(env.__FF_WORKER) end
 
 local cfg = {enabled = false, offsetMs = 0, humanize = false, missChance = 2, goodChance = 10, okChance = 0, badChance = 0, jitter = 15,
-    aim = false, aimTarget = 96}
+    spamWorse = 1.5, aim = false, aimTarget = 96}
 local fw
 local conns = {}
 local alive = true
@@ -93,7 +93,25 @@ local function currentAcc()
     return song.judged > 0 and song.acc / song.judged or 100
 end
 
-local function planFor(note)
+-- notes per second (all lanes, real time) around t: a human slips more on spam streams
+local function notesPerSec(field, t, pb)
+    local n = 0
+    for _, lane in pairs(field and field.Lanes or {}) do
+        if type(lane.Notes) == "table" then
+            for _, o in pairs(lane.Notes) do
+                if type(o.Time) == "number" and math.abs(o.Time - t) <= 0.5 * pb then n = n + 1 end
+            end
+        end
+    end
+    return n
+end
+
+-- 0 under 7 notes/s, rising to 1 at 15 notes/s, times the "Worse on spam" slider
+local function spamLevel(nps, strength)
+    return math.clamp((nps - 7) / 8, 0, 1) * (tonumber(strength) or 0)
+end
+
+local function planFor(note, field, pb)
     local p = plans[note]
     if p and p.ver == planVer then return p end
     p = {ver = planVer, ms = 0}
@@ -109,19 +127,23 @@ local function planFor(note)
 
         local hold = (tonumber(note.Length) or 0) > 0
         if hold then side = -1 end
+        local spam = spamLevel(notesPerSec(field, note.Time, pb or 1), cfg.spamWorse)
+        local k = 1 + spam * 1.5
+        local miss, good = cfg.missChance * k + spam * 2, cfg.goodChance * k + spam * 6
+        local ok, bad = cfg.okChance * k + spam * 4, cfg.badChance * k + spam * 1.5
         local roll = math.random() * 100
-        if roll < cfg.missChance then
+        if roll < miss then
             p.skip = true
-        elseif roll < cfg.missChance + cfg.goodChance then
+        elseif roll < miss + good then
             p.ms = side * (hold and 85 + math.random() * 30 or 56 + math.random() * 26)
-        elseif roll < cfg.missChance + cfg.goodChance + cfg.okChance then
+        elseif roll < miss + good + ok then
 
             p.ms = side * (hold and 160 + math.random() * 14 or 118 + math.random() * 14)
-        elseif roll < cfg.missChance + cfg.goodChance + cfg.okChance + cfg.badChance then
+        elseif roll < miss + good + ok + bad then
 
             p.ms = side * (hold and 176 + math.random() * 8 or 160 + math.random() * 12)
         else
-            p.ms = (math.random() * 2 - 1) * cfg.jitter
+            p.ms = (math.random() * 2 - 1) * math.min(cfg.jitter * (1 + spam), 48)
         end
     end
     plans[note] = p
@@ -202,7 +224,7 @@ local function step(dt)
 
                 if type(t) == "number" and not note.Hit and not note.Cleaned and not pressedAt[note]
                     and not (kind and table.find(ignored, kind)) then
-                    local p = planFor(note)
+                    local p = planFor(note, field, pb)
 
                     if not p.skip and now + lead >= t + p.ms / 1000 * pb - nudge and now - t < 0.195 * pb then
                         due = due or {}
@@ -214,7 +236,7 @@ local function step(dt)
                 table.sort(due, function(a, b) return a.Time < b.Time end)
                 for _, note in ipairs(due) do
 
-                    local at = note.Time + planFor(note).ms / 1000 * pb - nudge
+                    local at = note.Time + planFor(note, field, pb).ms / 1000 * pb - nudge
                     if held[i] then field:HitLane(i, false, stamp(at)) end
                     field:HitLane(i, true, stamp(at))
                     pressedAt[note] = clock
@@ -292,7 +314,7 @@ if not started then ch:Fire("stat", {status = "worker failed: " .. tostring(star
 
 local auto = {
     enabled = false, offsetMs = 0, humanize = false, missChance = 2, goodChance = 10, okChance = 0, badChance = 0, jitter = 15,
-    aim = false, aimTarget = 96,
+    spamWorse = 1.5, aim = false, aimTarget = 96,
 }
 local live = {status = "starting", presses = 0, title = "-", playing = false, acc = 100, judged = 0, misses = 0,
     combo = 0, best = 0, sick = 0, good = 0, ok = 0, bad = 0, at = 0, missLog = ""}
@@ -355,7 +377,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.4",
+local window = BPUI:CreateWindow({Version = "1.8.5",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -423,12 +445,15 @@ ctl.bad = human:AddSlider({Name = "Bad chance", DependsOn = ctl.humanize, Min = 
 ctl.jitter = human:AddSlider({Name = "Timing jitter", DependsOn = ctl.humanize, Min = 0, Max = 45, Default = 15, Increment = 1, Suffix = " ms", Flag = "ff_jitter",
     Description = "Random error on normal hits. Anything under 50 ms still counts as Sick.",
     Callback = function(v) set("jitter", tonumber(v) or 0) end})
+ctl.spam = human:AddSlider({Name = "Worse on spam", DependsOn = ctl.humanize, Min = 0, Max = 3, Default = 1.5, Increment = 0.1, Suffix = "x", Flag = "ff_spam",
+    Description = "On fast note streams it misses and slips more, like a real player. 0 plays spam like the rest of the song.",
+    Callback = function(v) set("spamWorse", tonumber(v) or 0) end})
 
 local PRESET_FILE = "FFAutoplay/presets.json"
 local BUILT_IN = {
     {name = "Perfect", s = {offset = 0, humanize = false, aim = false}},
-    {name = "Looks human", s = {offset = 0, humanize = true, miss = 2, good = 10, ok = 0, bad = 0, jitter = 15, aim = false}},
-    {name = "Sloppy", s = {offset = 0, humanize = true, miss = 6, good = 25, ok = 4, bad = 1.5, jitter = 35, aim = false}},
+    {name = "Looks human", s = {offset = 0, humanize = true, miss = 2, good = 10, ok = 0, bad = 0, jitter = 15, spam = 1.5, aim = false}},
+    {name = "Sloppy", s = {offset = 0, humanize = true, miss = 6, good = 25, ok = 4, bad = 1.5, jitter = 35, spam = 2.5, aim = false}},
     {name = "Aim for 95%", s = {offset = 0, aim = true, aimTarget = 95}},
 }
 local userPresets = {}
@@ -463,7 +488,7 @@ end
 
 local function currentSettings()
     return {offset = auto.offsetMs, humanize = auto.humanize, miss = auto.missChance, good = auto.goodChance, ok = auto.okChance, bad = auto.badChance,
-        jitter = auto.jitter, aim = auto.aim, aimTarget = auto.aimTarget}
+        jitter = auto.jitter, spam = auto.spamWorse, aim = auto.aim, aimTarget = auto.aimTarget}
 end
 
 local function applySettings(s)
@@ -475,6 +500,7 @@ local function applySettings(s)
     if num(s.ok, 0, 20) then ctl.ok:Set(num(s.ok, 0, 20)) end
     if num(s.bad, 0, 20) then ctl.bad:Set(num(s.bad, 0, 20)) end
     if num(s.jitter, 0, 45) then ctl.jitter:Set(num(s.jitter, 0, 45)) end
+    if num(s.spam, 0, 3) then ctl.spam:Set(num(s.spam, 0, 3)) end
     if num(s.aimTarget, 80, 100) then ctl.aimTarget:Set(num(s.aimTarget, 80, 100)) end
     if type(s.humanize) == "boolean" then ctl.humanize:Set(s.humanize) end
     if type(s.aim) == "boolean" then ctl.aim:Set(s.aim) end
@@ -577,12 +603,22 @@ local SEED_SONGS = {
     {"HoloFunk", "HoloFunk_TutorialNene", 58},
 }
 
-local pairCfg = {on = false, winner = "", loser = "", loserAcc = 99, song = "wins", -- song: "wins" or "score"
+local pairCfg = {on = false, winner = "", loser = "", loserAcc = 99, loserLow = false, song = "wins", -- song: "wins" or "score"
     hopOn = false, hopMin = 30} -- timed hop: leave the server after hopMin minutes
 local serverJoinedAt = os.clock() -- the script reloads in every new server, so this is when we got here
 -- "Best for score": a long, dense chart. Pack / song / chart names as the selector lists them.
 local SCORE_SONG = {pack = "VSBob", song = "VSBob_Run", chart = "Insane"}
 state.PairCfg = pairCfg -- lets other scripts (or a test) read/set the duo-farm options
+-- the loser either aims just under the winner, or (lowest score) presses nothing at all
+local function loserPlay()
+    if pairCfg.loserLow then
+        if auto.enabled then set("enabled", false) end
+    else
+        if not auto.enabled then set("enabled", true) end
+        if not auto.aim then set("aim", true) end
+        if auto.aimTarget ~= pairCfg.loserAcc then set("aimTarget", pairCfg.loserAcc) end
+    end
+end
 
 local function pjson(path)
     if type(isfile) == "function" and isfile(path) then
@@ -1562,6 +1598,9 @@ pairSec:AddInput({Name = "Loser username", Placeholder = "account that should lo
 pairSec:AddSlider({Name = "Loser accuracy", Min = 50, Max = 99.99, Default = 99, Increment = 0.01, Suffix = " %", Flag = "ff_pair_acc",
     Description = "The winner plays 100%. The loser aims for this one, so it always scores a little lower. Click the number to type one, like 99.99.",
     Callback = function(v) pairCfg.loserAcc = math.clamp(tonumber(v) or 99, 50, 99.99) end})
+pairSec:AddToggle({Name = "Loser: lowest score", Default = false, Flag = "ff_pair_loser_low",
+    Description = "The loser presses no notes at all, so it scores as low as the game allows. The accuracy above is ignored while this is on.",
+    Callback = function(v) pairCfg.loserLow = v == true end})
 pairSec:AddToggle({Name = "Hop server on a timer", Default = false, Flag = "ff_pair_hop_on",
     Description = "Both accounts move to a new server after the time below. It waits for the current song to finish.",
     Callback = function(v) pairCfg.hopOn = v == true end})
@@ -2273,13 +2312,12 @@ task.spawn(function()
                 sessionScore = 0
             end
             saveStats()
-            set("enabled", true)
             set("humanize", false)
             if role == "winner" then
+                set("enabled", true)
                 set("aim", false) -- no target = perfect
             else
-                set("aim", true)
-                set("aimTarget", pairCfg.loserAcc)
+                loserPlay()
             end
             local w, l = (role == "winner") and plr.Name or winner, (role == "loser") and plr.Name or loser
             pairSetStatus("running as the " .. role)
@@ -2303,7 +2341,7 @@ task.spawn(function()
             pairSetStatus("restarting (" .. tostring(why) .. ")")
         elseif role and pairRunning then
             -- loser accuracy slider can change while running
-            if role == "loser" then set("aimTarget", pairCfg.loserAcc) end
+            if role == "loser" then loserPlay() end
         elseif not want and pairRunning then
             pairEnd()
         end
