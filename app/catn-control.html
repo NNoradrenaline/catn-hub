@@ -85,6 +85,13 @@ a.btn { text-decoration: none; }
 .card-top .who { flex: 1; min-width: 0; }
 .card-top .who b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-top .who span { font-size: 12px; color: var(--sub); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* roblox avatars */
+.av { position: relative; flex: none; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: linear-gradient(140deg, var(--accent-soft), var(--el)); color: var(--accent); font-weight: 700; border: 1px solid var(--stroke2); line-height: 1; }
+.av::before { content: attr(data-ltr); }
+.av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.av.lg { width: 44px; height: 44px; font-size: 18px; }
+.av.sm { width: 24px; height: 24px; font-size: 11px; }
+.av.on { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok-soft); }
 .check { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--stroke2); background: none; display: grid; place-items: center; padding: 0; flex: none; margin-top: 2px; }
 .check.on { background: var(--accent); border-color: var(--accent); }
 .check.on::after { content: ""; width: 9px; height: 5px; border: 2px solid var(--accent-ink); border-top: 0; border-right: 0; transform: rotate(-45deg) translate(1px, -1px); }
@@ -445,6 +452,28 @@ function ago(sec) {
 }
 const joinUrl = (a) => a && a.pl ? "roblox://experiences/start?placeId=" + a.pl + (a.j ? "&gameInstanceId=" + a.j : "") : null;
 
+// ---------- Roblox avatars: headshots by UserId, fetched once and cached ----------
+const avatars = {}; // uid -> imageUrl ("" while pending or unavailable)
+function avatarHTML(key, a, cls, online) {
+  const uid = a && a.uid, url = uid && avatars[uid];
+  const ltr = esc((String((a && a.n) || key).trim()[0] || "?").toUpperCase());
+  return `<span class="av ${cls}${online ? " on" : ""}" data-ltr="${ltr}">${url ? `<img src="${esc(url)}" alt="" onerror="this.remove()">` : ""}</span>`;
+}
+function fetchAvatars() {
+  const need = [...new Set(linked().map((l) => (l.a || {}).uid).filter((u) => u && avatars[u] === undefined))];
+  if (!need.length) return;
+  for (const u of need) avatars[u] = ""; // ask once, even if it comes back empty
+  for (let i = 0; i < need.length; i += 100) {
+    const ids = need.slice(i, i + 100);
+    fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${ids.join(",")}&size=150x150&format=Png&isCircular=true`)
+      .then((r) => r.json()).then((d) => {
+        let got = false;
+        for (const x of (d && d.data) || []) if (x.state === "Completed" && x.imageUrl) { avatars[x.targetId] = x.imageUrl; got = true; }
+        if (got) render();
+      }).catch(() => {}); // CORS-blocked outside the desktop app: the monogram stays
+  }
+}
+
 // ---------- live activity feed + fleet health (all derived from the live streams) ----------
 const feed = [];            // newest first
 const snap = {};            // last seen per account, for diffing
@@ -481,6 +510,7 @@ function pulse() {
   const now = Date.now();
   winHist.push({ t: now, total });
   while (winHist.length > 2 && now - winHist[0].t > 600000) winHist.shift();
+  fetchAvatars(); // no-op once every linked account's headshot is cached
   if (feed.length !== before || attention.size !== att) schedule();
 }
 function winsPerMin() {
@@ -591,7 +621,7 @@ function renderSide() {
     `<button class="${ui.view === "leaderboard" ? "on" : ""}" data-go="leaderboard">${ICON.medal}Leaderboard</button>` +
     `<button class="${ui.view === "boards" ? "on" : ""}" data-go="boards">${ICON.trophy}Global boards</button>`;
   $("#accts").innerHTML = linked().map((l) =>
-    `<button class="acct-link ${ui.view === "acct" && ui.acct === l.key ? "on" : ""}" data-open="${esc(l.key)}"><span class="dot ${l.online ? "on" : ""}"></span><span class="nm">${esc(shown(l.key))}</span><span class="dim mono">${l.wins.filter((w) => w.alive).length || ""}</span></button>`
+    `<button class="acct-link ${ui.view === "acct" && ui.acct === l.key ? "on" : ""}" data-open="${esc(l.key)}">${avatarHTML(l.key, l.a, "sm", l.online)}<span class="nm">${esc(shown(l.key))}</span><span class="dim mono">${l.wins.filter((w) => w.alive).length || ""}</span></button>`
   ).join("") || `<div class="dim" style="padding:6px 10px;font-size:12px">No accounts linked yet</div>`;
   $("#foot").innerHTML =
     `<div class="conn"><span class="dot ${conn === "live" ? "on" : ""}"></span>${conn === "live" ? "Live" : conn === "reconnecting" ? "Reconnecting…" : "Connecting…"}</div>` +
@@ -650,6 +680,7 @@ function card(l) {
   const join = joinUrl(a);
   return `<div class="card ${ui.sel.has(l.key) ? "sel" : ""}">
     <div class="card-top"><button class="check ${ui.sel.has(l.key) ? "on" : ""}" data-sel="${esc(l.key)}" aria-label="Select"></button>
+      ${avatarHTML(l.key, a, "lg", l.online)}
       <div class="who"><b>${esc(shown(l.key))}</b><span>${esc(gameName(a))}${a.t ? " · " + ago(a.t) : ""}</span></div>
       <span class="pill ${l.online ? "on" : ""}">${l.online ? "Online" : "Offline"}</span></div>
     ${status ? `<div class="status-line">${esc(status)}</div>` : ""}
@@ -688,7 +719,7 @@ function viewAccount() {
   const join = joinUrl(a);
   const sceneNames = Object.keys(scenes[cur.key] || {});
   return `<div class="wrap">
-    <div class="head"><div class="grow"><h1>${esc(shown(key))}</h1>
+    <div class="head">${avatarHTML(key, a, "lg", C.isOnline(a, nowSec()))}<div class="grow"><h1>${esc(shown(key))}</h1>
       <p>${esc(gameName(a))}${a.t ? " · seen " + ago(a.t) : ""} · ${cur.alive ? '<span style="color:var(--ok)">script running</span>' : '<span class="dim">script not running</span>'}${(a.w != null || a.p != null) ? ` · ${fmt(a.w)} wins · ${fmt(a.p)} pts · +${fmt(a.sw || 0)} this run` : ""}${(a.w == null && a.p == null && a.rn != null) ? ` · +${fmt(a.rn)}${a.rl ? " " + esc(a.rl) : ""} this run` : ""}</p></div>
       <button class="btn ghost ${refreshing ? "busy" : ""}" data-refresh title="Pull a fresh snapshot now">${ICON.sync}Refresh</button>
       <button class="btn" data-op="rejoin" data-acct="${esc(key)}">${ICON.refresh}Rejoin</button>

@@ -1,5 +1,5 @@
 // Catn Control desktop app: one native window around catn-control.html.
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, shell, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
@@ -36,5 +36,10 @@ app.on("second-instance", () => {
   if (win.isMinimized()) win.restore();
   win.focus();
 });
-app.whenReady().then(create);
+app.whenReady().then(() => {
+  // Roblox's thumbnail API sends no CORS header; let the renderer read avatar image URLs from that one host.
+  session.defaultSession.webRequest.onHeadersReceived({ urls: ["https://thumbnails.roblox.com/*"] }, (d, cb) =>
+    cb({ responseHeaders: { ...d.responseHeaders, "access-control-allow-origin": ["*"] } }));
+  create();
+});
 app.on("window-all-closed", () => app.quit());

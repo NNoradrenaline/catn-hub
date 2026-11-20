@@ -377,7 +377,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.5",
+local window = BPUI:CreateWindow({Version = "1.8.6",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1800,6 +1800,18 @@ lifetime.wins = tonumber(lifetime.wins) or 0
 lifetime.since = lifetime.since or os.time()
 local function saveLifetime() pwrite(LIFE_FILE, lifetime) end
 
+-- "This run" (sw): wins gained since THIS execution. Survives server hops (the script reloads every hop) through a
+-- file heartbeat, but a fresh execute after a 10-minute gap starts from zero -- unlike lifetime.wins, which only
+-- the Reset button clears. This is what the control panel labels "This run".
+local EXEC_FILE = PAIR_FOLDER .. "/exec_" .. plr.Name .. ".json"
+local execWins = 0
+do
+    local saved = pjson(EXEC_FILE)
+    if saved and os.time() - (tonumber(saved.seen) or 0) < 600 then execWins = tonumber(saved.wins) or 0 end
+end
+local function saveExec() pwrite(EXEC_FILE, {wins = execWins, seen = os.time()}) end
+saveExec() -- stamp this execute so a hop reload within 10 min keeps the count
+
 local function commas(n)
     local s = tostring(math.floor((tonumber(n) or 0) + 0.5))
     local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
@@ -1854,6 +1866,7 @@ hookSec:AddButton({Name = "Reset score and win totals", ButtonText = "Reset", Ca
     lifetime = {score = 0, wins = 0, since = os.time(), lastWins = lifetime.lastWins, lastSeen = os.time()}
     sessionScore = 0
     if runStats.startedAt then runStats.score, runStats.wins = 0, 0 saveStats() end
+    execWins = 0; saveExec()
     saveLifetime()
     window:Notify({Title = "Totals", Content = "Score and win totals are back to zero.", Type = "Success", Duration = 3})
 end})
@@ -1910,7 +1923,7 @@ do
                 w = math.floor(realW), -- real leaderboard wins
                 p = math.floor(realP), -- real points (the game's Points currency)
                 ts = math.floor(realTS), -- real total score
-                sw = tonumber(lifetime.wins) or 0, -- wins the script farmed
+                sw = execWins, -- wins the script farmed since it was executed (this run), surviving hops
                 s = tonumber(lifetime.score) or 0, -- score the script farmed
                 rw = runStats.startedAt and (runStats.wins or 0) or nil,
                 rs = runStats.startedAt and sessionScore or nil,
@@ -1922,6 +1935,7 @@ do
         end
         task.spawn(function()
             while alive do
+                saveExec() -- heartbeat: keeps "this run" alive across a hop reload even in a dry spell
                 local data = statData()
                 if STATS_DB ~= "" then
                     -- merge FF's stats onto this account's node (the hub core writes the base presence); one bot GET, no rate wall
@@ -2190,6 +2204,7 @@ local function onWinsChanged(lbl)
         sessionScore += earned
         lifetime.score += earned
         lifetime.wins += gained
+        execWins += gained; saveExec()
         lifetime.lastScore = nil
         if runStats.startedAt then
             runStats.wins = (runStats.wins or 0) + gained

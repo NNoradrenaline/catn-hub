@@ -4763,7 +4763,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.17.3"
+local HUB_VERSION = "1.17.4"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -4811,7 +4811,7 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.8.5",
+        Version = "1.8.6",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
     {
@@ -5330,7 +5330,7 @@ do
             local function push(state)
                 local live = state == "in"
                 local data = {
-                    n = me.Name, pl = game.PlaceId, j = live and game.JobId or "", st = state,
+                    n = me.Name, uid = me.UserId, pl = game.PlaceId, j = live and game.JobId or "", st = state,
                     u = game.GameId, g = gname, t = os.time(), v = os.time(),
                 }
                 local run = env.CatnRun
