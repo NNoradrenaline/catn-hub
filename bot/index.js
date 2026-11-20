@@ -284,7 +284,8 @@ function helpEmbed() {
             "**`compare <name> <name>`** — two accounts side by side",
             "**`games`** — who's online, grouped by game",
             "**`search <game>`** — accounts in a given game",
-            "**`top`** / `top points` / `top score` — leaderboards",
+            "**`top`** / `top points` / `top score` — leaderboards of our accounts",
+            "**`global`** / `global weekly wins` — the game's real global boards, with our accounts' positions",
             "**`stats`** — grand totals · **`status`** — bot health",
           ].join("\n"),
         },
@@ -497,6 +498,47 @@ function topEmbed(accts, metric) {
   return brand(new EmbedBuilder().setTitle(m.title).setColor(0xffd166).setDescription(lines.join("\n")));
 }
 
+// Funky Friday's global lobby boards (weekly wins, all-time score...), as read in-game by the FF script:
+// boards/ff = { t, by, boards: { WeeklyWins: { title, rows: [{ r, n, v }] }, ... } }
+async function globalBoards() {
+  if (!FIREBASE) return null;
+  try {
+    const res = await fetch(FIREBASE + "/boards/ff.json");
+    const d = res.ok ? await res.json() : null;
+    if (!d || !d.boards || typeof d.boards !== "object") return null;
+    const boards = Object.values(d.boards).filter((b) => b && b.title && Array.isArray(b.rows));
+    return boards.length ? { t: d.t, by: d.by, boards } : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Overview of every board (top 5 + where our accounts sit), or one board in full when `which` matches its title.
+function globalEmbed(data, accts, which) {
+  const ours = new Set(accts.map((a) => a.name.toLowerCase()));
+  const isOurs = (n) => ours.has(String(n || "").toLowerCase());
+  const row = (x) => `${["🥇", "🥈", "🥉"][x.r - 1] || `\`#${x.r}\``} ${isOurs(x.n) ? "🐱 **" + esc(x.n) + "**" : esc(x.n)} — ${esc(x.v)}`;
+  const boards = data.boards;
+  const e = new EmbedBuilder().setColor(0xffd166);
+  const pick = which ? boards.find((b) => b.title.toLowerCase().includes(which)) : null;
+  if (which && !pick) return null;
+  if (pick) {
+    e.setTitle("🌍 " + esc(pick.title)).setDescription(pick.rows.slice(0, 25).map(row).join("\n").slice(0, 4000) || "Empty board.");
+  } else {
+    e.setTitle("🌍 Funky Friday global boards");
+    for (const b of boards.slice(0, 12)) {
+      const top = b.rows.slice(0, 5).map(row);
+      const mine = b.rows.slice(5).filter((x) => isOurs(x.n)).map(row);
+      e.addFields({ name: esc(b.title), value: top.concat(mine).join("\n").slice(0, 1024) || "Empty board.", inline: true });
+    }
+  }
+  const placed = [];
+  for (const b of pick ? [pick] : boards) for (const x of b.rows) if (isOurs(x.n)) placed.push(`**${esc(x.n)}** #${x.r} ${esc(b.title)}`);
+  e.addFields({ name: "🐱 Our accounts on the boards", value: (placed.join("\n") || "None of our accounts are on a board yet.").slice(0, 1024) });
+  if (data.t) e.addFields({ name: "Read", value: `<t:${data.t}:R>${data.by ? " by " + esc(data.by) : ""}`, inline: true });
+  return brand(e, "global boards");
+}
+
 // Accounts list split into Discord-safe pages (25 fields each, up to 10 embeds).
 function accountsEmbeds(accts, title) {
   if (!accts.length) return [];
@@ -679,6 +721,15 @@ async function handleCommand(word, rest) {
       const e = topEmbed(await allAccounts(), metric);
       return e ? { embeds: [e] } : "No accounts reported yet.";
     }
+    case "global":
+    case "boards":
+    case "board":
+    case "glb": {
+      const data = await globalBoards();
+      if (!data) return "No global board data yet — it appears once an account running the FF script has been in the lobby.";
+      const e = globalEmbed(data, await allAccounts(), rest);
+      return e ? { embeds: [e] } : `No board matching "${rest}". Boards: ${data.boards.map((b) => "`" + b.title + "`").join(", ")}`;
+    }
     case "stats":
     case "totals":
       return { embeds: [statsEmbed(await allAccounts())] };
@@ -757,6 +808,9 @@ const SLASH = [
   slash("top", "Leaderboard").addStringOption((o) =>
     o.setName("by").setDescription("What to rank by (default wins)").addChoices({ name: "wins", value: "wins" }, { name: "points", value: "points" }, { name: "score", value: "score" })
   ),
+  slash("global", "Funky Friday's global boards (weekly wins, score...) and where our accounts sit").addStringOption((o) =>
+    o.setName("board").setDescription("One board in full (leave empty for all)").setAutocomplete(true)
+  ),
   slash("stats", "Grand totals across every account"),
   slash("status", "Bot health"),
   slash("prune", "Drop stale accounts now"),
@@ -782,6 +836,7 @@ function slashToText(i) {
     word === "compare" ? `${o.getString("first")} ${o.getString("second")}`
     : word === "search" ? o.getString("game")
     : word === "top" ? o.getString("by") || ""
+    : word === "global" ? o.getString("board") || ""
     : ["account", "join", "remove"].includes(word) ? o.getString("name")
     : "";
   return { word, rest: String(rest || "").trim().toLowerCase() };
@@ -793,7 +848,10 @@ client.on(Events.InteractionCreate, async (i) => {
     try {
       const f = i.options.getFocused(true);
       const accts = await allAccounts(); // cached is fine for suggestions, and keeps us under Discord's 3s limit
-      const names = f.name === "game" ? accts.map((a) => a.game) : accts.map((a) => a.name);
+      const names =
+        f.name === "board" ? ((await globalBoards()) || { boards: [] }).boards.map((b) => b.title)
+        : f.name === "game" ? accts.map((a) => a.game)
+        : accts.map((a) => a.name);
       await i.respond(suggest(names, f.value));
     } catch (e) {
       i.respond([]).catch(() => {});
@@ -848,7 +906,7 @@ if (TEST) {
   module.exports = {
     abbrev, dur, esc, samePeers, accountsEmbed, accountsEmbeds, accountEmbed, topEmbed, statsEmbed, gamesEmbed, joinEmbed,
     statusEmbed, isAdmin, interactionIsAdmin, handleCommand, brand, helpEmbed, findAccount, notFound, editDistance,
-    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict, SLASH, suggest, slashToText,
+    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict, SLASH, suggest, slashToText, globalEmbed,
   };
 } else {
   client.login(TOKEN).catch((e) => {

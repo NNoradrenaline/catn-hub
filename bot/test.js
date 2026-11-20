@@ -168,8 +168,24 @@ ok(JSON.stringify(B.slashToText(fakeI("compare", { first: "Viper", second: "ABte
 ok(B.slashToText(fakeI("top", {})).rest === "", "slash top default");
 ok(B.slashToText(fakeI("join", { name: " Viper " })).rest === "viper", "slash join -> text");
 ok(B.slashToText(fakeI("search", { game: "Funky Friday" })).rest === "funky friday", "slash search -> text");
-const textCmds = ["accounts", "online", "games", "search", "account", "join", "compare", "top", "stats", "status", "prune", "remove", "help", "meow"];
+const textCmds = ["accounts", "online", "games", "search", "account", "join", "compare", "top", "global", "stats", "status", "prune", "remove", "help", "meow"];
 ok(B.SLASH.map((s) => s.name).join() === textCmds.join(), "every slash command maps to a text command");
+
+// --- global boards ---
+const gd = { t: now, by: "Viper", boards: [
+  { title: "Weekly Wins", rows: [{ r: 1, n: "ViperbmRumbleZ180266", v: "1.11k" }, { r: 2, n: "qqArtix", v: "1.04k" }, ...Array.from({ length: 10 }, (_, i) => ({ r: i + 3, n: "p" + i, v: "1" })), { r: 40, n: "abtestas24", v: "9" }] },
+  { title: "Weekly Score", rows: [{ r: 1, n: "qqArtix", v: "593m" }] },
+] };
+const gr = [acct({ name: "ViperbmRumbleZ180266" }), acct({ name: "abtestas24" })];
+const g1 = B.globalEmbed(gd, gr, "");
+ok(fields(g1).some((f) => /Weekly Wins/.test(f.name) && /abtestas24/.test(f.value)), "global: our account below top 5 still shown");
+ok(fields(g1).some((f) => /Our accounts/.test(f.name) && /#40 Weekly Wins/.test(f.value)), "global: our positions listed");
+ok(/Weekly Score/.test(B.globalEmbed(gd, gr, "score").data.title), "global: one board by name");
+ok(B.globalEmbed(gd, gr, "nope") === null, "global: unknown board");
+ok(/🐱 \*\*ViperbmRumbleZ180266/.test(desc(B.globalEmbed(gd, gr, "wins"))), "global: our rows marked");
+let gs = true;
+try { g1.toJSON(); } catch (e) { gs = false; }
+ok(gs && JSON.stringify(g1.data).length < 6000, "global embed serializes within limits");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

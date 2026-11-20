@@ -355,7 +355,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.3",
+local window = BPUI:CreateWindow({Version = "1.8.4",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1910,34 +1910,50 @@ do
                 task.wait(45) -- refresh often so the server id the bot hands out stays current across hops
             end
         end)
-        -- shortcut: one-off survey of the lobby's global boards so the bot's reader can be written; remove once it is.
+        -- Global lobby boards (Weekly Wins, Weekly Score, Winstreaks...) -> boards/ff, so the bot's leaderboard
+        -- command shows the game's real positions. Every FF user can write it; whoever is due first refreshes it.
         if STATS_DB ~= "" then
-            task.delay(20, function()
-                pcall(function()
-                    local res = req({Url = STATS_DB .. "boards/ffraw/t.json", Method = "GET"})
-                    local last = res and tonumber(res.Body)
-                    if last and os.time() - last < 600 then return end -- someone surveyed recently
-                    local guis = {}
-                    local function scan(root)
-                        for _, g in ipairs(root:GetDescendants()) do
-                            if (g:IsA("SurfaceGui") or g:IsA("BillboardGui")) and #guis < 16 then
-                                local texts, hit = {}, false
-                                for _, d in ipairs(g:GetDescendants()) do
-                                    if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" and #texts < 120 then
-                                        texts[#texts + 1] = d:GetFullName():sub(#g:GetFullName() + 2) .. " = " .. d.Text:sub(1, 40)
-                                        if d.Text:lower():find("win") or d.Text:lower():find("score") or d.Text:lower():find("weekly") then hit = true end
-                                    end
-                                end
-                                if hit then guis[#guis + 1] = {path = g:GetFullName(), adornee = g:IsA("SurfaceGui") and g.Adornee and g.Adornee:GetFullName() or "", texts = texts} end
+            local function readBoards()
+                local lb = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Leaderboards")
+                local boards = {}
+                for _, b in ipairs(lb and lb:GetChildren() or {}) do
+                    local g = b:FindFirstChild("SurfaceGui", true)
+                    local inner = g and g:FindFirstChild("SF") and g.SF:FindFirstChild("Inner")
+                    local title = b.Name
+                    for _, d in ipairs(g and g:GetDescendants() or {}) do
+                        if d:IsA("TextLabel") and d.Name:find("BoardLabel$") then title = d.Text end
+                    end
+                    local rows = {}
+                    for _, r in ipairs(inner and inner:GetChildren() or {}) do
+                        local rank, val = r:FindFirstChild("Rank"), r:FindFirstChild("Value")
+                        if r:IsA("Frame") and rank and val then
+                            local name
+                            for _, d in ipairs(r:GetDescendants()) do
+                                if d:IsA("TextLabel") and d ~= rank and d ~= val and d.Text ~= "" then name = d.Text break end
                             end
+                            if name and tonumber(rank.Text) then rows[#rows + 1] = {r = tonumber(rank.Text), n = name, v = val.Text} end
                         end
                     end
-                    scan(workspace)
-                    local pg = plr:FindFirstChild("PlayerGui")
-                    if pg then scan(pg) end
-                    req({Url = STATS_DB .. "boards/ffraw.json", Method = "PUT", Headers = {["Content-Type"] = "application/json"},
-                        Body = HttpService:JSONEncode({t = os.time(), by = plr.Name, guis = guis})})
-                end)
+                    table.sort(rows, function(x, y) return x.r < y.r end)
+                    if #rows > 0 then boards[b.Name] = {title = title, rows = rows} end
+                end
+                return boards
+            end
+            task.spawn(function()
+                task.wait(15) -- let the boards fill in after joining
+                while alive do
+                    pcall(function()
+                        local res = req({Url = STATS_DB .. "boards/ff/t.json", Method = "GET"})
+                        local last = res and tonumber(res.Body)
+                        if last and os.time() - last < 120 then return end -- someone refreshed it recently
+                        local boards = readBoards()
+                        if next(boards) then
+                            req({Url = STATS_DB .. "boards/ff.json", Method = "PUT", Headers = {["Content-Type"] = "application/json"},
+                                Body = HttpService:JSONEncode({t = os.time(), by = plr.Name, boards = boards})})
+                        end
+                    end)
+                    task.wait(120 + math.random(0, 30))
+                end
             end)
         end
     end
