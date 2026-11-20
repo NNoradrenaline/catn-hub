@@ -2,8 +2,11 @@
 
 One window that shows and controls every Catn script on your accounts.
 
-## Start it
-Double-click **Catn Control.cmd** (or the desktop shortcut). It opens in its own Edge window.
+## Install it
+A Windows app (Electron). `npm install`, then `npm run dist` builds it into `release/win-unpacked`
+(and an installer). The current install lives in `%LOCALAPPDATA%\Programs\Catn Control` with desktop and
+Start menu shortcuts. `npm start` runs it straight from the source.
+
 Sign in once with your Firebase login and the project's Web API key (Firebase → Project settings → General).
 
 ## Link an account

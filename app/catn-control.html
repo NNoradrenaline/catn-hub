@@ -185,6 +185,14 @@ tr.mine td { background: var(--accent-soft); color: var(--accent); }
 .toast b { display: block; font-weight: 600; }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } }
 
+/* desktop app: the window has no system title bar, so the top strip drags the window */
+.drag { display: none; }
+html.desk .drag { display: block; position: fixed; top: 0; left: 0; right: 140px; height: 36px; -webkit-app-region: drag; z-index: 15; }
+html.desk .brand { padding-top: 34px; }
+html.desk .wrap { padding-top: 48px; }
+html.desk .login { padding-top: 40px; }
+html.desk .login::before { content: ""; position: fixed; top: 0; left: 0; right: 140px; height: 36px; -webkit-app-region: drag; }
+
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; }
   .side { display: none; }
@@ -194,6 +202,8 @@ tr.mine td { background: var(--accent-soft); color: var(--accent); }
 </style>
 </head>
 <body>
+<script>if (/Electron/.test(navigator.userAgent)) document.documentElement.classList.add("desk");</script>
+<div class="drag"></div>
 <div class="app">
   <aside class="side">
     <div class="brand"><img src="cat.png" alt=""><div><b>Catn Control</b><span>every script, one window</span></div></div>

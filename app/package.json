@@ -1,0 +1,27 @@
+{
+  "name": "catn-control",
+  "productName": "Catn Control",
+  "version": "1.0.0",
+  "description": "Controls every Catn script on your accounts",
+  "author": "catnba",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node core.test.js",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "38.8.6",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.catn.control",
+    "productName": "Catn Control",
+    "files": ["main.js", "catn-control.html", "core.js", "cat.png", "cat.ico"],
+    "directories": { "output": "release" },
+    "electronDist": "node_modules/electron/dist",
+    "win": { "icon": "cat.ico", "target": "nsis" },
+    "nsis": { "oneClick": true, "perMachine": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "shortcutName": "Catn Control" }
+  }
+}
