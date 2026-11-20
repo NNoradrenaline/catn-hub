@@ -7,7 +7,7 @@ A Windows app (Electron). `npm install`, then `npm run dist` builds it into `rel
 (and an installer). The current install lives in `%LOCALAPPDATA%\Programs\Catn Control` with desktop and
 Start menu shortcuts. `npm start` runs it straight from the source.
 
-Sign in once with your Firebase login and the project's Web API key (Firebase → Project settings → General).
+Sign in once with your Firebase email and password.
 
 ## Link an account
 In any Catn script, open **Settings → Menu** and turn on **Allow Catn Control**. That turns it on for every

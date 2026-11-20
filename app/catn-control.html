@@ -222,6 +222,8 @@ html.desk .login::before { content: ""; position: fixed; top: 0; left: 0; right:
 "use strict";
 const C = window.CatnCore;
 const DB = "https://catn-db-default-rtdb.firebaseio.com/";
+// public project key: it only names the project; the DB rules and your password do the protecting
+const API_KEY = "AIzaSyAziLliiJqmMbi8okNuTwB4l_D8V6-8SRc";
 const DEMO = new URLSearchParams(location.search).has("demo");
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -265,7 +267,7 @@ async function token() {
   if (DEMO) return "demo";
   if (idToken && Date.now() < idExp - 300000) return idToken;
   if (!auth) throw new Error("signed out");
-  const r = await fetch("https://securetoken.googleapis.com/v1/token?key=" + encodeURIComponent(auth.apiKey), {
+  const r = await fetch("https://securetoken.googleapis.com/v1/token?key=" + encodeURIComponent(auth.apiKey || API_KEY), {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: "grant_type=refresh_token&refresh_token=" + encodeURIComponent(auth.refresh),
   });
@@ -626,10 +628,8 @@ function robloxKey(e) {
 // ---------- sign-in ----------
 function renderLogin() {
   if (DEMO || auth) { $("#login").innerHTML = ""; return; }
-  const key = lsGet("catn.apiKey", "");
   $("#login").innerHTML = `<div class="login"><form id="lf">
     <img src="cat.png" alt=""><h1>Catn Control</h1><p>Sign in with your Firebase login. Only it can send orders.</p>
-    <label>Web API key<input class="field" name="key" value="${esc(key)}" placeholder="Firebase → Project settings → General" required autocomplete="off" spellcheck="false"></label>
     <label>Email<input class="field" name="email" type="email" required autocomplete="username"></label>
     <label>Password<input class="field" name="pw" type="password" required autocomplete="current-password"></label>
     <div class="err" id="lerr"></div>
@@ -639,8 +639,7 @@ function renderLogin() {
     const f = e.target, btn = f.querySelector("button");
     btn.disabled = true; btn.textContent = "Signing in…"; $("#lerr").textContent = "";
     try {
-      lsSet("catn.apiKey", f.key.value.trim());
-      await signIn(f.key.value.trim(), f.email.value.trim(), f.pw.value);
+      await signIn(API_KEY, f.email.value.trim(), f.pw.value);
       renderLogin(); render();
     } catch (err) { $("#lerr").textContent = err.message; btn.disabled = false; btn.textContent = "Sign in"; }
   });
