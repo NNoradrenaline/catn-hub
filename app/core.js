@@ -55,15 +55,17 @@
     return tabs;
   }
 
-  // the script's own status line, if it shows one
+  // the script's own live status line, whatever the game calls it
   function statusText(win) {
     if (!win || !win.layout || !win.v) return null;
-    for (const c of Array.isArray(win.layout) ? win.layout : Object.values(win.layout)) {
-      if (c && (c.kind === "Paragraph" || c.kind === "Label") && /status/i.test(c.name + " " + (c.section || ""))) {
-        const v = win.v[c.id];
-        if (typeof v === "string" && v.trim()) return v;
-      }
-    }
+    const lay = Array.isArray(win.layout) ? win.layout : Object.values(win.layout);
+    const val = (c) => { const v = win.v[c.id]; return typeof v === "string" ? v.trim() : ""; };
+    const ok = (s) => s && s !== "-" && s !== "–";
+    const isText = (c) => c && (c.kind === "Paragraph" || c.kind === "Label");
+    // 1. a control the script itself labels "status" / "state"
+    for (const c of lay) if (isText(c) && /status|state/i.test((c.name || "") + " " + (c.section || "")) && ok(val(c))) return val(c);
+    // 2. otherwise the first live line that isn't a history/log readout
+    for (const c of lay) if (isText(c) && !/last |misses|history|log|recent/i.test(c.name || "") && ok(val(c))) return val(c);
     return null;
   }
 

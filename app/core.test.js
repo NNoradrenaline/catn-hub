@@ -34,6 +34,9 @@ assert.deepStrictEqual(g[0].sections.map((s) => s.controls.map((c) => c.id)), [[
 // status line
 assert.strictEqual(C.statusText({ layout: [{ id: "s", kind: "Paragraph", name: "Status" }], v: { s: "on the pad" } }), "on the pad");
 assert.strictEqual(C.statusText({ layout: [{ id: "s", kind: "Toggle", name: "Status" }], v: { s: true } }), null);
+// falls back to the first live line when nothing is literally named "status"
+assert.strictEqual(C.statusText({ layout: [{ id: "a", kind: "Label", name: "starting" }, { id: "b", kind: "Paragraph", name: "Last songs" }], v: { a: "waiting for a song", b: "a long log" } }), "waiting for a song");
+assert.strictEqual(C.statusText({ layout: [{ id: "a", kind: "Label", name: "song" }], v: { a: "-" } }), null);
 
 // order outcomes
 const o = { op: "set", kind: "Toggle", value: true, t: 1000 };

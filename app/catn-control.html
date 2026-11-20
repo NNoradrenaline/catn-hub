@@ -527,7 +527,7 @@ function palItems() {
     { label: "Rejoin all online", sub: "action", run: () => { const ks = linked().filter((l) => l.online).map((l) => l.key); sendMany(ks, { op: "rejoin" }); } },
     { label: "Hop all online", sub: "action", run: () => { const ks = linked().filter((l) => l.online).map((l) => l.key); if (ks.length && confirm("Hop all " + ks.length + " online accounts?")) sendMany(ks, { op: "hop" }); } },
   ];
-  const accts = linked().map((l) => ({ label: shown(l.key), sub: (l.a && l.a.g) || "account", run: () => { ui.view = "acct"; ui.acct = l.key; ui.win = null; ui.tab = null; ui.q = ""; ui.also.clear(); schedule(); } }));
+  const accts = linked().map((l) => ({ label: shown(l.key), sub: (l.a && l.a.g) ? gameName(l.a) : "account", run: () => { ui.view = "acct"; ui.acct = l.key; ui.win = null; ui.tab = null; ui.q = ""; ui.also.clear(); schedule(); } }));
   const q = pal.q.trim().toLowerCase(), all = acts.concat(accts);
   return q ? all.filter((x) => (x.label + " " + x.sub).toLowerCase().includes(q)) : all;
 }
@@ -629,6 +629,12 @@ function viewHome() {
     </div>
     <div class="home-grid"><div class="cards">${Lf.length ? Lf.map(card).join("") : `<div class="empty"><p>No accounts with that tag.</p></div>`}</div>${feedPanel()}</div></div>`;
 }
+const PLACE_NAMES = { 6447798030: "Funky Friday", 1458767429: "Anime Battle Arena", 6520999642: "Basically FNF" };
+function gameName(a) {
+  if (!a || !a.g) return "Not in a game";
+  if (a.pl && PLACE_NAMES[a.pl]) return PLACE_NAMES[a.pl];
+  return String(a.g).replace(/^\[[^\]]*\]\s*/, "").trim() || "Not in a game";
+}
 function card(l) {
   const a = l.a || {}, alive = l.wins.filter((w) => w.alive);
   const status = alive.map((w) => C.statusText(w.w)).find(Boolean);
@@ -641,10 +647,10 @@ function card(l) {
   const join = joinUrl(a);
   return `<div class="card ${ui.sel.has(l.key) ? "sel" : ""}">
     <div class="card-top"><button class="check ${ui.sel.has(l.key) ? "on" : ""}" data-sel="${esc(l.key)}" aria-label="Select"></button>
-      <div class="who"><b>${esc(shown(l.key))}</b><span>${esc(a.g || "Not in a game")}${a.t ? " · " + ago(a.t) : ""}</span></div>
+      <div class="who"><b>${esc(shown(l.key))}</b><span>${esc(gameName(a))}${a.t ? " · " + ago(a.t) : ""}</span></div>
       <span class="pill ${l.online ? "on" : ""}">${l.online ? "Online" : "Offline"}</span></div>
     ${status ? `<div class="status-line">${esc(status)}</div>` : ""}
-    <div class="kv"><div><small>Wins</small><b>${fmt(a.w)}</b></div><div><small>Points</small><b>${fmt(a.p)}</b></div><div><small>Run wins</small><b>${a.rt ? fmt(a.rw) : "–"}</b></div></div>
+    ${(a.w != null || a.p != null) ? `<div class="kv"><div><small>Wins</small><b>${fmt(a.w)}</b></div><div><small>Points</small><b>${fmt(a.p)}</b></div><div title="wins the script has farmed since it started"><small>This run</small><b>${a.sw != null ? "+" + fmt(a.sw) : "–"}</b></div></div>` : ""}
     <div class="chips">${l.wins.map((w) => `<span class="pill ${w.alive ? "acc" : ""}">${esc(w.title)}</span>`).join("")}</div>
     ${myPins ? `<div class="pins">${myPins}</div>` : ""}
     <div class="card-actions">
@@ -679,7 +685,7 @@ function viewAccount() {
   const sceneNames = Object.keys(scenes[cur.key] || {});
   return `<div class="wrap">
     <div class="head"><div class="grow"><h1>${esc(shown(key))}</h1>
-      <p>${esc(a.g || "Not in a game")}${a.t ? " · seen " + ago(a.t) : ""} · ${cur.alive ? '<span style="color:var(--ok)">script running</span>' : '<span class="dim">script not running</span>'}</p></div>
+      <p>${esc(gameName(a))}${a.t ? " · seen " + ago(a.t) : ""} · ${cur.alive ? '<span style="color:var(--ok)">script running</span>' : '<span class="dim">script not running</span>'}${(a.w != null || a.p != null) ? ` · ${fmt(a.w)} wins · ${fmt(a.p)} pts · +${fmt(a.sw || 0)} this run` : ""}</p></div>
       <button class="btn ghost ${refreshing ? "busy" : ""}" data-refresh title="Pull a fresh snapshot now">${ICON.sync}Refresh</button>
       <button class="btn" data-op="rejoin" data-acct="${esc(key)}">${ICON.refresh}Rejoin</button>
       <button class="btn" data-op="hop" data-acct="${esc(key)}">${ICON.hop}Hop server</button>
