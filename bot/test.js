@@ -182,10 +182,28 @@ ok(fields(g1).some((f) => /Weekly Wins/.test(f.name) && /abtestas24/.test(f.valu
 ok(fields(g1).some((f) => /Our accounts/.test(f.name) && /#40 Weekly Wins/.test(f.value)), "global: our positions listed");
 ok(/Weekly Score/.test(B.globalEmbed(gd, gr, "score").data.title), "global: one board by name");
 ok(B.globalEmbed(gd, gr, "nope") === null, "global: unknown board");
-ok(/🐱 \*\*ViperbmRumbleZ180266/.test(desc(B.globalEmbed(gd, gr, "wins"))), "global: our rows marked");
+ok(/🐱 \*\*catnba \(name hidden\)/.test(desc(B.globalEmbed(gd, gr, "wins"))), "global: our rows marked");
 let gs = true;
 try { g1.toJSON(); } catch (e) { gs = false; }
 ok(gs && JSON.stringify(g1.data).length < 6000, "global embed serializes within limits");
+
+// --- hidden names: never shown anywhere the bot renders ---
+const hv = acct({ name: "ViperbmRumbleZ180266", placeId: 9, jobId: "j9", presence: "in", lastSeen: now - 5, game: "Funky Friday" });
+const hq = acct({ name: "qqArtix", placeId: 9, jobId: "j9", presence: "in", lastSeen: now - 5, game: "Funky Friday" });
+const ha = acct({ name: "Artem_and321" });
+const hidRoster = [hv, hq, ha, acct({ name: "abtestas24" })];
+const leak = (x) => /viperbm|qqartix|artem/i.test(JSON.stringify(x));
+ok(B.shown("viperbmrumblez180266") === "catnba (name hidden)" && B.shown("QQARTIX") === "art (name hidden)" && B.shown("Artem_and321") === "art (name hidden)", "aliases");
+ok(!leak(B.accountEmbed(hidRoster, "ViperbmRumbleZ180266").toJSON()), "card hides name + peers");
+ok(!leak(B.joinEmbed(hidRoster, "qqartix").toJSON()), "join hides name");
+ok(!leak(B.accountsEmbeds(hidRoster).map((e) => e.toJSON())), "list hides names");
+ok(!leak(B.gamesEmbed(hidRoster).toJSON()) && !leak(B.topEmbed(hidRoster, "wins").toJSON()), "games + top hide names");
+ok(!leak(B.globalEmbed(gd, hidRoster, "").toJSON()), "global boards hide names");
+ok(!leak(B.compareEmbed(hv, hq).toJSON()), "compare hides names");
+const dym = B.notFound(hidRoster, "viperbmrumblez18026");
+ok(/Did you mean `catnba \(name hidden\)`/.test(dym) && !leak(dym.split("Did you mean")[1]), "did-you-mean hides names");
+ok(B.findAccount(hidRoster, "catnba").name === "ViperbmRumbleZ180266", "alias finds the account");
+ok(B.suggest(hidRoster.map((a) => a.name), "catn")[0].value === "ViperbmRumbleZ180266", "autocomplete matches alias");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

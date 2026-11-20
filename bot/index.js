@@ -27,7 +27,11 @@ const {
   escapeMarkdown,
   SlashCommandBuilder,
 } = require("discord.js");
-const esc = (s) => escapeMarkdown(String(s == null ? "" : s)); // usernames like Eloise_QwQ must not turn into italics
+// Accounts whose real username the bot never shows: every name goes through esc(), so mapping it there covers
+// cards, lists, boards, peers and titles. Lookups still accept the real name or the alias.
+const HIDDEN = { viperbmrumblez180266: "catnba (name hidden)", qqartix: "art (name hidden)", "artem_and321": "art (name hidden)" };
+const shown = (s) => HIDDEN[String(s == null ? "" : s).toLowerCase()] || String(s == null ? "" : s);
+const esc = (s) => escapeMarkdown(shown(s)); // usernames like Eloise_QwQ must not turn into italics
 
 const TEST = !!process.env.BOT_TEST; // when set, export helpers and don't log in (for the test harness)
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -357,7 +361,7 @@ function accountEmbed(accts, query) {
   if (meta.length) embed.addFields({ name: ZW, value: meta.join(" · ") });
   const peers = a.online && a.jobId ? samePeers(accts, a) : [];
   if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 In the same server", value: peers.map(esc).join(", ").slice(0, 1000), inline: false });
-  embed.addFields({ name: "🔗 Join", value: `\`join ${a.name}\`` });
+  embed.addFields({ name: "🔗 Join", value: HIDDEN[a.name.toLowerCase()] ? "Press **🔗 Join** below." : `\`join ${a.name}\`` });
   return brand(embed, a.online ? "online" : "offline");
 }
 
@@ -387,7 +391,14 @@ const VERDICT_LABEL = {
 function findAccount(accts, query) {
   const q = String(query || "").toLowerCase();
   if (!q) return null;
-  return accts.find((x) => x.name.toLowerCase() === q) || accts.find((x) => x.name.toLowerCase().includes(q)) || null;
+  const alias = (x) => shown(x.name).toLowerCase();
+  return (
+    accts.find((x) => x.name.toLowerCase() === q) ||
+    accts.find((x) => HIDDEN[x.name.toLowerCase()] && alias(x) === q) ||
+    accts.find((x) => x.name.toLowerCase().includes(q)) ||
+    accts.find((x) => HIDDEN[x.name.toLowerCase()] && alias(x).includes(q)) ||
+    null
+  );
 }
 
 function editDistance(a, b) {
@@ -407,7 +418,7 @@ function notFound(accts, query) {
     .filter((x) => x.d <= Math.max(2, Math.floor(q.length / 3)))
     .sort((x, y) => x.d - y.d)
     .slice(0, 3)
-    .map((x) => "`" + x.name + "`");
+    .map((x) => "`" + shown(x.name) + "`");
   return `No account matching "${esc(query)}".` + (close.length ? ` Did you mean ${close.join(", ")}?` : "");
 }
 
@@ -823,8 +834,9 @@ const SLASH = [
 function suggest(names, typed) {
   const q = String(typed || "").toLowerCase();
   const uniq = [...new Set(names.filter(Boolean))];
-  const starts = uniq.filter((n) => n.toLowerCase().startsWith(q));
-  const has = uniq.filter((n) => !n.toLowerCase().startsWith(q) && n.toLowerCase().includes(q));
+  const keys = (n) => [n.toLowerCase(), shown(n).toLowerCase()]; // real name or alias
+  const starts = uniq.filter((n) => keys(n).some((k) => k.startsWith(q)));
+  const has = uniq.filter((n) => !starts.includes(n) && keys(n).some((k) => k.includes(q)));
   return starts.concat(has).slice(0, 25).map((n) => ({ name: n.slice(0, 100), value: n.slice(0, 100) }));
 }
 
@@ -852,7 +864,7 @@ client.on(Events.InteractionCreate, async (i) => {
         f.name === "board" ? ((await globalBoards()) || { boards: [] }).boards.map((b) => b.title)
         : f.name === "game" ? accts.map((a) => a.game)
         : accts.map((a) => a.name);
-      await i.respond(suggest(names, f.value));
+      await i.respond(suggest(names, f.value).map((c) => ({ name: shown(c.value).slice(0, 100), value: c.value }))); // hidden accounts show their alias
     } catch (e) {
       i.respond([]).catch(() => {});
     }
@@ -906,7 +918,7 @@ if (TEST) {
   module.exports = {
     abbrev, dur, esc, samePeers, accountsEmbed, accountsEmbeds, accountEmbed, topEmbed, statsEmbed, gamesEmbed, joinEmbed,
     statusEmbed, isAdmin, interactionIsAdmin, handleCommand, brand, helpEmbed, findAccount, notFound, editDistance,
-    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict, SLASH, suggest, slashToText, globalEmbed,
+    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict, SLASH, suggest, slashToText, globalEmbed, shown,
   };
 } else {
   client.login(TOKEN).catch((e) => {
