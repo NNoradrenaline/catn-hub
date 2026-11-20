@@ -25,6 +25,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   escapeMarkdown,
+  SlashCommandBuilder,
 } = require("discord.js");
 const esc = (s) => escapeMarkdown(String(s == null ? "" : s)); // usernames like Eloise_QwQ must not turn into italics
 
@@ -272,7 +273,7 @@ function helpEmbed() {
     new EmbedBuilder()
       .setTitle("🎧 Catn Yapper")
       .setColor(COLOR)
-      .setDescription("Your panel over the hub farms, across every game. Prefix with `catn ` or `!` if you like — both optional. _Admins only._")
+      .setDescription("Your panel over the hub farms, across every game. Type **`/`** for slash commands with name autocomplete, or type them plainly (`catn ` / `!` prefix optional). _Admins only._")
       .addFields(
         {
           name: "📊 Stats",
@@ -612,6 +613,10 @@ const client = new Client({
 client.once(Events.ClientReady, (c) => {
   BOT_ICON = c.user.displayAvatarURL({ size: 128 });
   console.log("online as " + c.user.tag + " | db: " + (FIREBASE ? "firebase" : STATS_WEBHOOK ? "channel" : "local only") + " | admins only | farm dir: " + FARM_DIR);
+  c.application.commands.set(SLASH.map((s) => s.toJSON())).then(
+    (cmds) => console.log("slash commands registered: " + cmds.size),
+    (e) => console.error("slash register failed:", e.message)
+  );
   if (FIREBASE) {
     pruneStale();
     setInterval(() => pruneStale().then(invalidateAccounts), 30 * 60 * 1000); // keep the roster tidy
@@ -736,6 +741,79 @@ function interactionIsAdmin(i) {
   return !!(i.memberPermissions && i.memberPermissions.has(PermissionsBitField.Flags.Administrator));
 }
 
+// Slash commands: the same commands as text, with account/game names that autocomplete.
+// Hidden from non-admins by default; interactionIsAdmin still checks, since server owners can override that.
+const ADMIN_PERM = PermissionsBitField.Flags.Administrator;
+const slash = (name, desc) => new SlashCommandBuilder().setName(name).setDescription(desc).setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false);
+const nameOpt = (o, n = "name", d = "Roblox account name") => o.setName(n).setDescription(d).setRequired(true).setAutocomplete(true);
+const SLASH = [
+  slash("accounts", "Every account: wins, points, game & status"),
+  slash("online", "Only the accounts online right now"),
+  slash("games", "Who's online, grouped by game"),
+  slash("search", "Accounts in a given game").addStringOption((o) => nameOpt(o, "game", "Game name")),
+  slash("account", "Full stats for one account").addStringOption((o) => nameOpt(o)),
+  slash("join", "Script + one-click link into an account's live server (only you see it)").addStringOption((o) => nameOpt(o)),
+  slash("compare", "Two accounts side by side").addStringOption((o) => nameOpt(o, "first", "First account")).addStringOption((o) => nameOpt(o, "second", "Second account")),
+  slash("top", "Leaderboard").addStringOption((o) =>
+    o.setName("by").setDescription("What to rank by (default wins)").addChoices({ name: "wins", value: "wins" }, { name: "points", value: "points" }, { name: "score", value: "score" })
+  ),
+  slash("stats", "Grand totals across every account"),
+  slash("status", "Bot health"),
+  slash("prune", "Drop stale accounts now"),
+  slash("remove", "Forget one account (exact name)").addStringOption((o) => nameOpt(o)),
+  slash("help", "What I can do"),
+  slash("meow", "A random cat gif"),
+];
+
+// Up to 25 autocomplete picks: names starting with what was typed first, then ones containing it.
+function suggest(names, typed) {
+  const q = String(typed || "").toLowerCase();
+  const uniq = [...new Set(names.filter(Boolean))];
+  const starts = uniq.filter((n) => n.toLowerCase().startsWith(q));
+  const has = uniq.filter((n) => !n.toLowerCase().startsWith(q) && n.toLowerCase().includes(q));
+  return starts.concat(has).slice(0, 25).map((n) => ({ name: n.slice(0, 100), value: n.slice(0, 100) }));
+}
+
+// Turn a slash interaction into the text command's (word, rest), so both share handleCommand.
+function slashToText(i) {
+  const o = i.options;
+  const word = i.commandName;
+  const rest =
+    word === "compare" ? `${o.getString("first")} ${o.getString("second")}`
+    : word === "search" ? o.getString("game")
+    : word === "top" ? o.getString("by") || ""
+    : ["account", "join", "remove"].includes(word) ? o.getString("name")
+    : "";
+  return { word, rest: String(rest || "").trim().toLowerCase() };
+}
+
+client.on(Events.InteractionCreate, async (i) => {
+  if (i.isAutocomplete()) {
+    if (!interactionIsAdmin(i)) return void i.respond([]).catch(() => {});
+    try {
+      const f = i.options.getFocused(true);
+      const accts = await allAccounts(); // cached is fine for suggestions, and keeps us under Discord's 3s limit
+      const names = f.name === "game" ? accts.map((a) => a.game) : accts.map((a) => a.name);
+      await i.respond(suggest(names, f.value));
+    } catch (e) {
+      i.respond([]).catch(() => {});
+    }
+    return;
+  }
+  if (!i.isChatInputCommand()) return;
+  if (!interactionIsAdmin(i)) return void i.reply({ content: "Admins only.", ephemeral: true }).catch(() => {});
+  const { word, rest } = slashToText(i);
+  const ephemeral = word === "join"; // the join script is for you, not the channel
+  try {
+    await i.deferReply({ ephemeral });
+    const reply = await handleCommand(word, rest);
+    await i.editReply(reply || "Unknown command.");
+  } catch (e) {
+    console.error("slash failed:", e.message);
+    (i.deferred ? i.editReply("Something went wrong running that — try again in a moment.") : i.reply({ content: "That didn't work.", ephemeral: true })).catch(() => {});
+  }
+});
+
 // Buttons: Refresh redraws the card in place, Join answers privately (only the clicker sees the script).
 client.on(Events.InteractionCreate, async (i) => {
   if (!i.isButton()) return;
@@ -770,7 +848,7 @@ if (TEST) {
   module.exports = {
     abbrev, dur, esc, samePeers, accountsEmbed, accountsEmbeds, accountEmbed, topEmbed, statsEmbed, gamesEmbed, joinEmbed,
     statusEmbed, isAdmin, interactionIsAdmin, handleCommand, brand, helpEmbed, findAccount, notFound, editDistance,
-    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict,
+    compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict, SLASH, suggest, slashToText,
   };
 } else {
   client.login(TOKEN).catch((e) => {

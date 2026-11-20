@@ -155,5 +155,21 @@ const buddy = acct({ name: "Buddy", placeId: 9, jobId: "live-1", presence: "hopp
 ok(!B.samePeers([ver, buddy], ver).includes("Buddy"), "hopping account not listed as in the same server");
 ok(hasField(B.accountEmbed([ver], "ver"), /Server[\s\S]*verified/), "card shows verified state");
 
+// --- slash commands ---
+let slashOk = true;
+try { B.SLASH.forEach((s) => s.toJSON()); } catch (e) { slashOk = false; console.error(e.message); }
+ok(slashOk, "slash definitions serialize");
+ok(B.SLASH.every((s) => s.toJSON().default_member_permissions === "8"), "slash hidden from non-admins");
+const sug = B.suggest(["abtestas24", "ViperbmRumbleZ180266", "xab", "abtestas24", ""], "AB");
+ok(sug.length === 2 && sug[0].value === "abtestas24" && sug[1].value === "xab", "suggest: prefix first, dedup, contains after");
+ok(B.suggest(Array.from({ length: 40 }, (_, i) => "n" + i), "").length === 25, "suggest caps at 25");
+const fakeI = (cmd, opts) => ({ commandName: cmd, options: { getString: (k) => (k in opts ? opts[k] : null) } });
+ok(JSON.stringify(B.slashToText(fakeI("compare", { first: "Viper", second: "ABtest" }))) === '{"word":"compare","rest":"viper abtest"}', "slash compare -> text");
+ok(B.slashToText(fakeI("top", {})).rest === "", "slash top default");
+ok(B.slashToText(fakeI("join", { name: " Viper " })).rest === "viper", "slash join -> text");
+ok(B.slashToText(fakeI("search", { game: "Funky Friday" })).rest === "funky friday", "slash search -> text");
+const textCmds = ["accounts", "online", "games", "search", "account", "join", "compare", "top", "stats", "status", "prune", "remove", "help", "meow"];
+ok(B.SLASH.map((s) => s.name).join() === textCmds.join(), "every slash command maps to a text command");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

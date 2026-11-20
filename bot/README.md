@@ -10,6 +10,8 @@ one-click way to join their exact server.
 
 An optional `catn` or `!` prefix works on all of them. Typos are fine: unknown names get "did you mean…".
 
+Every command is also a **slash command** (`/join`, `/account`, `/compare`…) with account and game names that autocomplete as you type. They are registered automatically at startup and hidden from non-admins. `/join` answers privately, so only you see the script.
+
 | Command | What it does |
 | --- | --- |
 | `accounts` | Every account: wins, points, game and status (pages automatically past 25) |
