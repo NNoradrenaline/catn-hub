@@ -21,7 +21,7 @@
     "files": ["main.js", "catn-control.html", "core.js", "cat.png", "cat.ico"],
     "directories": { "output": "release" },
     "electronDist": "node_modules/electron/dist",
-    "win": { "icon": "cat.ico", "target": "nsis" },
+    "win": { "icon": "cat.ico", "target": "nsis", "signAndEditExecutable": false },
     "nsis": { "oneClick": true, "perMachine": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "shortcutName": "Catn Control" }
   }
 }

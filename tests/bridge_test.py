@@ -43,7 +43,7 @@ g.py_encode = lambda t: json.dumps(lua2py(t))
 g.py_decode = lambda s: py2lua(json.loads(s))
 L.execute(r'''
 NOW = 3000
-files = {catn_control_on = "1"}
+files = {}
 function isfile(p) return files[p] ~= nil end
 function readfile(p) return files[p] end
 request = function(o) return py_request(o) end
@@ -140,8 +140,4 @@ assert lay and len(lay[0]) == 8, lay
 assert val and val[0]['v']['Farm|Duo|Status'] == 'on the pad' and val[0]['v']['ff_auto'] is True, val
 assert val[0]['v']['Farm|Duo|Broken'] is False, 'switches that are off must be sent too'
 
-# opted out: nothing is sent or run
-L.execute('files.catn_control_on = "0"')
-tick({'z': {'op': 'press', 'window': W, 'id': 'Farm|Duo|Hop now', 't': 5090}})
-assert reqs == [] and g.pressed == 1
 print('bridge: all tests pass')

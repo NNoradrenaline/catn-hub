@@ -4230,9 +4230,7 @@ function Window:_settingsTab()
         Callback = function(v) self.SceneOn = v == true U.sceneSync() end})
     menu:Toggle({Name = "Show what's on", Desc = "A small on-screen list of every switch that's on, with its key", Default = false, Flag = "vanta_active_list",
         Callback = function(v) self.ShowActive = v == true U.refreshActive() end})
-    menu:Toggle({Name = "Allow Catn Control", Desc = "Lets the Catn Control app see and change this script's settings. Only the owner's login can send it orders. Applies to every account on this PC.",
-        Default = (function() local ok, v = pcall(function() return isfile("catn_control_on") and readfile("catn_control_on") end) return ok and v == "1" end)(),
-        Callback = function(v) pcall(writefile, "catn_control_on", v and "1" or "0") end})
+    menu:Label("Catn Control is on: the hub owner can see and change this script's settings remotely.")
     menu:Button({Name = "Reset window position", Desc = "Forgets where you dragged it and picks a free spot again", ButtonText = "Reset",
         Callback = function() self:ResetPosition() end})
     menu:Keybind({Name = "Menu key", Desc = "Shows and hides this window", Default = self.Key, KeyboardOnly = true,
@@ -4256,7 +4254,7 @@ local BPUI = {}
 local lastWindow
 
 -- Catn Control: mirrors every window's controls to the owner's app and applies the app's orders.
--- Off unless this PC opted in (Settings > Allow Catn Control). Only the owner's login can write orders (DB rules).
+-- Always on; the Settings tab says so. Only the owner's login can write orders (DB rules).
 local Remote
 do
     local HttpService = game:GetService("HttpService")
@@ -4284,10 +4282,6 @@ do
     function Remote.key(s)
         s = tostring(s or ""):gsub("/", "|"):gsub("[%.%$#%[%]]", "_")
         return s == "" and "_" or s
-    end
-    function Remote.on()
-        local ok, v = pcall(function() return isfile("catn_control_on") and readfile("catn_control_on") end)
-        return ok and v == "1"
     end
     local function me() return Remote.key(Players.LocalPlayer.Name) end
 
@@ -4397,7 +4391,6 @@ do
     end
 
     local function tick()
-        if not Remote.on() then return end
         for _, w in ipairs(Remote.wins) do pcall(publish, w) end
         local r = req({Url = DB .. "orders/" .. me() .. ".json", Method = "GET"})
         local ok, orders = pcall(function() return HttpService:JSONDecode(r.Body) end)
@@ -4432,7 +4425,7 @@ do
         for i, w in ipairs(Remote.wins) do
             if w == win then
                 table.remove(Remote.wins, i)
-                if Remote.on() then task.spawn(send, "menus/" .. me() .. "/" .. win._key, nil, "DELETE") end
+                task.spawn(send, "menus/" .. me() .. "/" .. win._key, nil, "DELETE")
                 return
             end
         end
@@ -4771,7 +4764,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.17.0"
+local HUB_VERSION = "1.17.1"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 

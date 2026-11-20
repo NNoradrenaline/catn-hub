@@ -9,9 +9,9 @@ Start menu shortcuts. `npm start` runs it straight from the source.
 
 Sign in once with your Firebase email and password.
 
-## Link an account
-In any Catn script, open **Settings → Menu** and turn on **Allow Catn Control**. That turns it on for every
-account on that PC. It is off by default, so nobody else who runs Catn Hub can be controlled.
+## Accounts
+Every account running a Catn script shows up on its own. The script's Settings tab tells the player
+that the hub owner can control it remotely.
 
 ## How it works
 - Every Catn window sends its menu and current values to `menus/<account>/<window>`.
