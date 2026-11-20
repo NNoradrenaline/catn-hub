@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catn Control</title>
+<link rel="icon" href="cat.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #09090b; --side: #0c0c0f; --panel: #141418; --el: #1a1a1f; --hover: #22222a; --stroke: #26262d; --stroke2: #33333c;
+  --text: #ededf0; --sub: #9a9aa6; --muted: #63636e;
+  --accent: #eaa06c; --accent-ink: #26140a; --accent-soft: rgba(234,160,108,.14);
+  --ok: #4ade80; --ok-soft: rgba(74,222,128,.13); --bad: #f87171; --bad-soft: rgba(248,113,113,.13); --warn: #fbbf24;
+  --r: 12px; --r-sm: 8px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: inherit; }
+.mono { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-size: 12px; }
+.muted { color: var(--sub); }
+.dim { color: var(--muted); }
+
+/* shell */
+.app { display: grid; grid-template-columns: 248px 1fr; height: 100vh; }
+.side { background: var(--side); border-right: 1px solid var(--stroke); display: flex; flex-direction: column; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 18px 18px 14px; }
+img[src="cat.png"] { image-rendering: pixelated; }
+a.btn { text-decoration: none; }
+.brand img { width: 34px; height: 34px; filter: drop-shadow(0 2px 8px rgba(234,160,108,.35)); }
+.brand b { font-size: 15px; letter-spacing: -.01em; display: block; }
+.brand span { font-size: 11px; color: var(--muted); }
+.nav { padding: 6px 10px; display: grid; gap: 2px; }
+.nav button, .acct-link { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--r-sm); background: none; color: var(--sub); text-align: left; }
+.nav button:hover, .acct-link:hover { background: var(--hover); color: var(--text); }
+.nav button.on, .acct-link.on { background: var(--el); color: var(--text); box-shadow: inset 0 0 0 1px var(--stroke); }
+.nav svg { width: 16px; height: 16px; flex: none; }
+.side h6 { margin: 18px 20px 6px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.accts { overflow: auto; padding: 0 10px 10px; flex: 1; display: grid; gap: 1px; align-content: start; }
+.acct-link { font-size: 13px; }
+.acct-link .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.side-foot { border-top: 1px solid var(--stroke); padding: 12px 16px; font-size: 12px; display: grid; gap: 8px; }
+.conn { display: flex; align-items: center; gap: 8px; color: var(--sub); }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--sub); text-decoration: underline; text-underline-offset: 2px; }
+.linkbtn:hover { color: var(--text); }
+
+.main { overflow: auto; min-width: 0; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 28px 32px 60px; }
+.head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+.head h1 { margin: 0; font-size: 24px; letter-spacing: -.02em; font-weight: 700; }
+.head p { margin: 4px 0 0; color: var(--sub); }
+.head .grow { flex: 1; min-width: 200px; }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid var(--stroke2); background: var(--el); color: var(--text); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.07); }
+.btn.ghost { background: none; border-color: transparent; color: var(--sub); }
+.btn.ghost:hover { background: var(--hover); color: var(--text); }
+.btn.danger { color: var(--bad); }
+.btn.sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn svg { width: 14px; height: 14px; }
+
+/* stats */
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat { background: var(--panel); border: 1px solid var(--stroke); border-radius: var(--r); padding: 14px 16px; }
+.stat small { color: var(--sub); font-size: 12px; }
+.stat b { display: block; font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+/* account cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--stroke); border-radius: var(--r); padding: 16px; display: flex; flex-direction: column; gap: 12px; position: relative; transition: border-color .15s; }
+.card:hover { border-color: var(--stroke2); }
+.card.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.card-top { display: flex; align-items: flex-start; gap: 10px; }
+.card-top .who { flex: 1; min-width: 0; }
+.card-top .who b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-top .who span { font-size: 12px; color: var(--sub); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--stroke2); background: none; display: grid; place-items: center; padding: 0; flex: none; margin-top: 2px; }
+.check.on { background: var(--accent); border-color: var(--accent); }
+.check.on::after { content: ""; width: 9px; height: 5px; border: 2px solid var(--accent-ink); border-top: 0; border-right: 0; transform: rotate(-45deg) translate(1px, -1px); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: var(--el); color: var(--sub); border: 1px solid var(--stroke); white-space: nowrap; }
+.pill.on { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+.pill.acc { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.status-line { font-size: 13px; color: var(--text); background: var(--el); border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 8px 10px; display: flex; gap: 8px; align-items: flex-start; }
+.status-line::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-top: 7px; flex: none; }
+.kv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.kv div small { display: block; font-size: 11px; color: var(--muted); }
+.kv div b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.card-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+.pins { display: grid; gap: 6px; }
+.pins .row { padding: 6px 0; border-top: 1px solid var(--stroke); }
+.pins input[type=range] { width: 90px; }
+.pins .num { width: 52px; }
+
+.bulk { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(10px); border: 1px solid var(--accent); border-radius: var(--r); padding: 10px 14px; margin-bottom: 16px; }
+.bulk b { flex: 1; }
+
+/* account view */
+.seg { display: inline-flex; background: var(--el); border: 1px solid var(--stroke); border-radius: 10px; padding: 3px; gap: 2px; flex-wrap: wrap; }
+.seg button { border: 0; background: none; color: var(--sub); padding: 6px 12px; border-radius: 7px; font-size: 13px; font-weight: 500; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--hover); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 16px; }
+.search { flex: 1; min-width: 200px; height: 34px; border-radius: var(--r-sm); border: 1px solid var(--stroke2); background: var(--el); padding: 0 12px; outline: none; }
+.search:focus, .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.also { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--sub); margin-bottom: 16px; }
+.also button { border: 1px solid var(--stroke2); background: none; color: var(--sub); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.also button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.sections { columns: 2 440px; column-gap: 14px; }
+.section { break-inside: avoid; background: var(--panel); border: 1px solid var(--stroke); border-radius: var(--r); margin: 0 0 14px; overflow: hidden; }
+.section h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--sub); padding: 12px 16px 6px; }
+.row { display: flex; align-items: center; gap: 12px; padding: 9px 16px; min-height: 46px; }
+.row + .row { border-top: 1px solid var(--stroke); }
+.row .lbl { flex: 1; min-width: 0; }
+.row .lbl b { font-weight: 500; display: block; }
+.row .lbl small { display: block; color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 1px; }
+.row.text { color: var(--sub); font-size: 13px; }
+.row.text b { color: var(--text); font-weight: 500; }
+.ctl { display: flex; align-items: center; gap: 8px; flex: none; }
+.pin { border: 0; background: none; padding: 4px; color: var(--muted); border-radius: 6px; opacity: 0; transition: opacity .12s; }
+.row:hover .pin, .pin.on { opacity: 1; }
+.pin.on { color: var(--accent); }
+.pin svg { width: 14px; height: 14px; display: block; }
+.st { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
+.st.pending::after { content: ""; width: 11px; height: 11px; border: 2px solid var(--stroke2); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+.st.ok { color: var(--ok); }
+.st.fail { color: var(--bad); }
+.st svg { width: 14px; height: 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* controls */
+.sw { width: 38px; height: 22px; border-radius: 999px; border: 0; background: var(--stroke2); position: relative; padding: 0; transition: background .15s; }
+.sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.sw.on { background: var(--accent); }
+.sw.on::after { transform: translateX(16px); }
+.field { height: 30px; border-radius: 7px; border: 1px solid var(--stroke2); background: var(--el); padding: 0 10px; outline: none; max-width: 220px; }
+select.field { padding-right: 28px; }
+input[type=range] { width: 150px; accent-color: var(--accent); }
+.num { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+input[type=color] { width: 34px; height: 28px; padding: 0; border: 1px solid var(--stroke2); border-radius: 7px; background: none; }
+.opt-chips { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; max-width: 300px; }
+.opt-chips button { border: 1px solid var(--stroke2); background: none; color: var(--sub); border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+.opt-chips button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.key { min-width: 64px; justify-content: center; }
+.key.listen { border-color: var(--accent); color: var(--accent); }
+
+/* boards */
+.boards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+td { padding: 6px 16px; border-top: 1px solid var(--stroke); }
+td:first-child { width: 44px; color: var(--muted); font-variant-numeric: tabular-nums; }
+td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+tr.mine td { background: var(--accent-soft); color: var(--accent); }
+
+/* empty, sign-in */
+.empty { text-align: center; padding: 70px 20px; color: var(--sub); }
+.empty img { width: 72px; opacity: .9; }
+.empty h2 { color: var(--text); margin: 14px 0 6px; font-size: 18px; }
+.empty p { max-width: 460px; margin: 0 auto 6px; }
+.login { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(1200px 600px at 50% -10%, rgba(234,160,108,.12), transparent 60%), var(--bg); z-index: 20; padding: 16px; }
+.login form { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--stroke); border-radius: 16px; padding: 28px; display: grid; gap: 14px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+.login img { width: 56px; margin: 0 auto; }
+.login h1 { margin: 0; text-align: center; font-size: 20px; }
+.login p { margin: -6px 0 4px; text-align: center; color: var(--sub); font-size: 13px; }
+.login label { display: grid; gap: 6px; font-size: 12px; color: var(--sub); font-weight: 500; }
+.login .field { max-width: none; height: 38px; }
+.login .btn { height: 40px; justify-content: center; }
+.err { color: var(--bad); font-size: 13px; min-height: 18px; text-align: center; }
+
+/* toasts */
+.toasts { position: fixed; right: 18px; bottom: 18px; display: grid; gap: 8px; z-index: 30; width: min(360px, calc(100vw - 36px)); }
+.toast { background: var(--panel); border: 1px solid var(--stroke2); border-left: 3px solid var(--bad); border-radius: 10px; padding: 10px 14px; font-size: 13px; box-shadow: 0 12px 40px rgba(0,0,0,.5); animation: rise .2s ease-out; }
+.toast.ok { border-left-color: var(--ok); }
+.toast b { display: block; font-weight: 600; }
+@keyframes rise { from { transform: translateY(8px); opacity: 0; } }
+
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; }
+  .side { display: none; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .wrap { padding: 20px 16px 50px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><img src="cat.png" alt=""><div><b>Catn Control</b><span>every script, one window</span></div></div>
+    <nav class="nav" id="nav"></nav>
+    <h6>Accounts</h6>
+    <div class="accts" id="accts"></div>
+    <div class="side-foot" id="foot"></div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+<div class="toasts" id="toasts"></div>
+<div id="login"></div>
+
+<script src="core.js"></script>
+<script>
+"use strict";
+const C = window.CatnCore;
+const DB = "https://catn-db-default-rtdb.firebaseio.com/";
+const DEMO = new URLSearchParams(location.search).has("demo");
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const path = (...parts) => parts.map((p) => encodeURIComponent(p)).join("/");
+const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+const ICON = {
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+  trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M5 17h14l-2-3V5a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v9z"/></svg>',
+  ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>',
+  hop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  join: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>',
+};
+
+// ---------- state ----------
+const store = { accounts: {}, menus: {}, acks: {}, boards: null };
+const orders = new Map(); // order id -> {acct, op, window, id, kind, value, t, state, msg, doneAt}
+const ui = { view: "home", acct: null, win: null, tab: null, q: "", sel: new Set(), also: new Set(), listen: null };
+let pins = lsGet("catn.pins", {}); // acct key -> ["window\u0001id", ...]
+let auth = lsGet("catn.auth", null); // {apiKey, refresh, uid, email}
+let idToken = null, idExp = 0, conn = "connecting";
+
+// ---------- auth ----------
+async function signIn(apiKey, email, password) {
+  const r = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + encodeURIComponent(apiKey), {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(({ INVALID_LOGIN_CREDENTIALS: "Wrong email or password.", INVALID_PASSWORD: "Wrong email or password.", EMAIL_NOT_FOUND: "No login with that email.",
+    TOO_MANY_ATTEMPTS_TRY_LATER: "Too many tries, wait a minute." })[j.error && j.error.message] ||
+    (/API key/i.test(j.error && j.error.message || "") ? "That Web API key isn't right." : "Couldn't sign in: " + (j.error && j.error.message || r.status)));
+  auth = { apiKey, refresh: j.refreshToken, uid: j.localId, email: j.email };
+  idToken = j.idToken; idExp = Date.now() + Number(j.expiresIn || 3600) * 1000;
+  lsSet("catn.auth", auth);
+}
+async function token() {
+  if (DEMO) return "demo";
+  if (idToken && Date.now() < idExp - 300000) return idToken;
+  if (!auth) throw new Error("signed out");
+  const r = await fetch("https://securetoken.googleapis.com/v1/token?key=" + encodeURIComponent(auth.apiKey), {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "grant_type=refresh_token&refresh_token=" + encodeURIComponent(auth.refresh),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { signOut(); throw new Error("Your sign-in ran out. Sign in again."); }
+  idToken = j.id_token; idExp = Date.now() + Number(j.expires_in || 3600) * 1000;
+  if (j.refresh_token && j.refresh_token !== auth.refresh) { auth.refresh = j.refresh_token; lsSet("catn.auth", auth); }
+  return idToken;
+}
+function signOut() { auth = null; idToken = null; try { localStorage.removeItem("catn.auth"); } catch {} renderLogin(); }
+
+// ---------- live data ----------
+function stream(dbPath, key) {
+  const es = new EventSource(DB + dbPath + ".json");
+  const on = (kind) => (e) => {
+    try { const m = JSON.parse(e.data); store[key] = C.applyEvent(store[key], m.path, m.data, kind); conn = "live"; schedule(); } catch {}
+  };
+  es.addEventListener("put", on("put"));
+  es.addEventListener("patch", on("patch"));
+  es.onopen = () => { conn = "live"; schedule(); };
+  es.onerror = () => { conn = "reconnecting"; schedule(); };
+}
+
+// ---------- orders ----------
+async function send(acct, o) {
+  const id = C.newOrderId(Date.now());
+  const ord = { acct, op: o.op, window: o.window || "", id: o.id || "", kind: o.kind || "", value: o.value, t: Date.now(), state: "pending" };
+  orders.set(id, ord);
+  schedule();
+  if (DEMO) return demoAnswer(id, ord);
+  try {
+    const tok = await token();
+    const body = { op: ord.op, window: ord.window, id: ord.id, t: ord.t };
+    if (ord.value !== undefined) body.value = ord.value;
+    const r = await fetch(DB + path("orders", acct, id) + ".json?auth=" + encodeURIComponent(tok), { method: "PUT", body: JSON.stringify(body) });
+    if (!r.ok) finish(id, "fail", r.status === 401 ? "not allowed: sign in with your own login" : "couldn't send (" + r.status + ")");
+  } catch (e) { finish(id, "fail", e.message || "couldn't send"); }
+}
+function sendMany(accts, o) { for (const a of accts) send(a, o); }
+function finish(id, state, msg) {
+  const o = orders.get(id);
+  if (!o || o.state !== "pending") return;
+  o.state = state; o.msg = msg; o.doneAt = Date.now();
+  if (state === "fail") toast(shown(o.acct) + ": " + (o.op === "set" || o.op === "press" ? "“" + ctlName(o) + "” " : o.op + " ") + "didn't work", msg);
+  else if (o.op === "rejoin" || o.op === "hop") toast(shown(o.acct) + (o.op === "hop" ? " is hopping servers" : " is rejoining"), null, true);
+  if (!DEMO) cleanup(id, o);
+  schedule();
+}
+async function cleanup(id, o) {
+  try { const tok = await token(); await fetch(DB + path("orders", o.acct, id) + ".json?auth=" + encodeURIComponent(tok), { method: "DELETE" }); } catch {}
+  try { await fetch(DB + path("acks", o.acct, id) + ".json", { method: "DELETE" }); } catch {}
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, o] of orders) {
+    if (o.state === "pending") {
+      const ack = (store.acks[o.acct] || {})[id];
+      const res = C.orderOutcome(o, ack, now);
+      if (res.state !== "pending") finish(id, res.state, res.msg);
+    } else if (now - o.doneAt > 2500) { orders.delete(id); schedule(); }
+  }
+}, 500);
+function stateOf(acct, win, id) {
+  let last = null;
+  for (const o of orders.values()) if (o.acct === acct && o.window === win && o.id === id && (!last || o.t > last.t)) last = o;
+  return last;
+}
+
+// ---------- helpers over the data ----------
+const nowSec = () => Date.now() / 1000;
+function acctOf(key) {
+  const a = store.accounts || {};
+  if (a[key]) return a[key];
+  for (const v of Object.values(a)) if (v && C.encodeKey(v.n) === key) return v;
+  return null;
+}
+const shown = (key) => (acctOf(key) || {}).n || key;
+function windowsOf(key) {
+  const m = (store.menus || {})[key] || {};
+  return Object.entries(m).filter(([, w]) => w && typeof w === "object").map(([k, w]) => ({ key: k, title: w.title || k, w, alive: C.windowAlive(w, Date.now()) }));
+}
+function linked() {
+  return Object.keys(store.menus || {}).map((key) => {
+    const a = acctOf(key), wins = windowsOf(key);
+    return { key, a, wins, online: C.isOnline(a, nowSec()) || wins.some((w) => w.alive) };
+  }).sort((x, y) => (y.online - x.online) || shown(x.key).localeCompare(shown(y.key)));
+}
+function ctlName(o) {
+  const w = ((store.menus || {})[o.acct] || {})[o.window];
+  const lay = w && w.layout ? (Array.isArray(w.layout) ? w.layout : Object.values(w.layout)) : [];
+  const c = lay.find((x) => x && x.id === o.id);
+  return c ? c.name : o.id;
+}
+const fmt = (n) => (Number(n) || 0).toLocaleString();
+function ago(sec) {
+  const d = Math.max(0, nowSec() - sec);
+  return d < 60 ? "just now" : d < 3600 ? Math.floor(d / 60) + "m ago" : d < 86400 ? Math.floor(d / 3600) + "h ago" : Math.floor(d / 86400) + "d ago";
+}
+const joinUrl = (a) => a && a.pl ? "roblox://experiences/start?placeId=" + a.pl + (a.j ? "&gameInstanceId=" + a.j : "") : null;
+
+// ---------- render ----------
+let queued = false, held = false;
+function schedule() { if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; render(); }); } }
+function busy() {
+  const el = document.activeElement;
+  return el && $("#main").contains(el) && (el.matches("input:not([type=color]), select") || el.dataset.drag === "1");
+}
+function render() {
+  renderSide();
+  if (busy()) { held = true; return; } // don't yank a field out from under the cursor
+  held = false;
+  const main = $("#main"), top = main.scrollTop;
+  main.innerHTML = ui.view === "acct" && ui.acct ? viewAccount() : ui.view === "boards" ? viewBoards() : viewHome();
+  main.scrollTop = top;
+}
+document.addEventListener("focusout", () => setTimeout(() => { if (held) render(); }, 0));
+
+function renderSide() {
+  $("#nav").innerHTML =
+    `<button class="${ui.view === "home" ? "on" : ""}" data-go="home">${ICON.home}Overview</button>` +
+    `<button class="${ui.view === "boards" ? "on" : ""}" data-go="boards">${ICON.trophy}Global boards</button>`;
+  $("#accts").innerHTML = linked().map((l) =>
+    `<button class="acct-link ${ui.view === "acct" && ui.acct === l.key ? "on" : ""}" data-open="${esc(l.key)}"><span class="dot ${l.online ? "on" : ""}"></span><span class="nm">${esc(shown(l.key))}</span><span class="dim mono">${l.wins.filter((w) => w.alive).length || ""}</span></button>`
+  ).join("") || `<div class="dim" style="padding:6px 10px;font-size:12px">No accounts linked yet</div>`;
+  $("#foot").innerHTML =
+    `<div class="conn"><span class="dot ${conn === "live" ? "on" : ""}"></span>${conn === "live" ? "Live" : conn === "reconnecting" ? "Reconnecting…" : "Connecting…"}</div>` +
+    (DEMO ? `<div class="dim">Demo data</div>` : auth ? `<div class="dim">${esc(auth.email || "")} · <button class="linkbtn" data-signout>Sign out</button></div>` : "");
+}
+
+function viewHome() {
+  const L = linked();
+  if (!L.length) return `<div class="wrap">${emptyLinked()}</div>`;
+  const online = L.filter((l) => l.online).length;
+  const running = L.reduce((n, l) => n + l.wins.filter((w) => w.alive).length, 0);
+  const wins = L.reduce((n, l) => n + (Number(l.a && l.a.w) || 0), 0);
+  const sel = [...ui.sel].filter((k) => L.some((l) => l.key === k));
+  return `<div class="wrap">
+    <div class="head"><div class="grow"><h1>Overview</h1><p>Everything your accounts are running, live.</p></div>
+      <button class="btn" data-selall>${sel.length === L.length ? "Select none" : "Select all"}</button></div>
+    ${sel.length ? `<div class="bulk"><b>${sel.length} selected</b>
+      <button class="btn sm" data-bulk="rejoin">${ICON.refresh}Rejoin</button>
+      <button class="btn sm" data-bulk="hop">${ICON.hop}Hop</button>
+      <button class="btn sm ghost" data-clearsel>Clear</button></div>` : ""}
+    <div class="stats">
+      <div class="stat"><small>Linked accounts</small><b>${L.length}</b></div>
+      <div class="stat"><small>Online</small><b>${online}</b></div>
+      <div class="stat"><small>Scripts running</small><b>${running}</b></div>
+      <div class="stat"><small>Wins (all accounts)</small><b>${fmt(wins)}</b></div>
+    </div>
+    <div class="cards">${L.map(card).join("")}</div></div>`;
+}
+function card(l) {
+  const a = l.a || {}, alive = l.wins.filter((w) => w.alive);
+  const status = alive.map((w) => C.statusText(w.w)).find(Boolean);
+  const myPins = (pins[l.key] || []).map((p) => p.split("\u0001")).map(([win, id]) => {
+    const w = ((store.menus || {})[l.key] || {})[win];
+    const lay = w && w.layout ? (Array.isArray(w.layout) ? w.layout : Object.values(w.layout)) : [];
+    const c = lay.find((x) => x && x.id === id);
+    return c ? controlRow(l.key, win, w, c, true) : "";
+  }).join("");
+  const join = joinUrl(a);
+  return `<div class="card ${ui.sel.has(l.key) ? "sel" : ""}">
+    <div class="card-top"><button class="check ${ui.sel.has(l.key) ? "on" : ""}" data-sel="${esc(l.key)}" aria-label="Select"></button>
+      <div class="who"><b>${esc(shown(l.key))}</b><span>${esc(a.g || "Not in a game")}${a.t ? " · " + ago(a.t) : ""}</span></div>
+      <span class="pill ${l.online ? "on" : ""}">${l.online ? "Online" : "Offline"}</span></div>
+    ${status ? `<div class="status-line">${esc(status)}</div>` : ""}
+    <div class="kv"><div><small>Wins</small><b>${fmt(a.w)}</b></div><div><small>Points</small><b>${fmt(a.p)}</b></div><div><small>Run wins</small><b>${a.rt ? fmt(a.rw) : "–"}</b></div></div>
+    <div class="chips">${l.wins.map((w) => `<span class="pill ${w.alive ? "acc" : ""}">${esc(w.title)}</span>`).join("")}</div>
+    ${myPins ? `<div class="pins">${myPins}</div>` : ""}
+    <div class="card-actions">
+      <button class="btn sm primary" data-open="${esc(l.key)}">Open</button>
+      <button class="btn sm" data-op="rejoin" data-acct="${esc(l.key)}" ${alive.length ? "" : "disabled"}>${ICON.refresh}Rejoin</button>
+      <button class="btn sm" data-op="hop" data-acct="${esc(l.key)}" ${alive.length ? "" : "disabled"}>${ICON.hop}Hop</button>
+      ${join ? `<a class="btn sm ghost" href="${esc(join)}">${ICON.join}Join</a>` : ""}
+    </div></div>`;
+}
+function emptyLinked() {
+  return `<div class="empty"><img src="cat.png" alt=""><h2>No accounts linked yet</h2>
+    <p>On each PC, open any Catn script, go to <b>Settings → Menu</b> and turn on <b>Allow Catn Control</b>.</p>
+    <p class="dim">Accounts show up here a few seconds later.</p></div>`;
+}
+
+function viewAccount() {
+  const key = ui.acct, a = acctOf(key) || {}, wins = windowsOf(key);
+  if (!wins.length) return `<div class="wrap">${emptyLinked()}</div>`;
+  if (!wins.some((w) => w.key === ui.win)) ui.win = (wins.find((w) => w.alive) || wins[0]).key;
+  const cur = wins.find((w) => w.key === ui.win);
+  const tabs = C.groupLayout(cur.w.layout);
+  if (!tabs.some((t) => t.key === ui.tab)) ui.tab = tabs[0] && tabs[0].key;
+  const q = ui.q.trim().toLowerCase();
+  const others = linked().filter((l) => l.key !== key && l.wins.some((w) => w.key === ui.win));
+  for (const k of [...ui.also]) if (!others.some((l) => l.key === k)) ui.also.delete(k);
+  const shownTabs = q ? tabs : tabs.filter((t) => t.key === ui.tab);
+  const body = shownTabs.map((t) => t.sections.map((s) => {
+    const rows = s.controls.filter((c) => !q || (c.name + " " + (c.desc || "") + " " + t.tab).toLowerCase().includes(q))
+      .map((c) => controlRow(key, cur.key, cur.w, c, false)).filter(Boolean).join("");
+    return rows ? `<div class="section">${s.name || q ? `<h3>${esc(q ? t.tab + (s.name ? " · " + s.name : "") : s.name)}</h3>` : ""}${rows}</div>` : "";
+  }).join("")).join("");
+  const join = joinUrl(a);
+  return `<div class="wrap">
+    <div class="head"><div class="grow"><h1>${esc(shown(key))}</h1>
+      <p>${esc(a.g || "Not in a game")}${a.t ? " · seen " + ago(a.t) : ""} · ${cur.alive ? '<span style="color:var(--ok)">script running</span>' : '<span class="dim">script not running</span>'}</p></div>
+      <button class="btn" data-op="rejoin" data-acct="${esc(key)}">${ICON.refresh}Rejoin</button>
+      <button class="btn" data-op="hop" data-acct="${esc(key)}">${ICON.hop}Hop server</button>
+      ${join ? `<a class="btn" href="${esc(join)}">${ICON.join}Join</a>` : ""}</div>
+    ${wins.length > 1 ? `<div class="toolbar"><div class="seg">${wins.map((w) => `<button class="${w.key === ui.win ? "on" : ""}" data-win="${esc(w.key)}">${esc(w.title)}${w.alive ? "" : " (closed)"}</button>`).join("")}</div></div>` : ""}
+    <div class="toolbar">
+      <div class="seg">${tabs.map((t) => `<button class="${!q && t.key === ui.tab ? "on" : ""}" data-tab="${esc(t.key)}">${esc(t.tab)}</button>`).join("")}</div>
+      <input class="search" id="q" placeholder="Search every setting in ${esc(cur.title)}…" value="${esc(ui.q)}">
+    </div>
+    ${others.length ? `<div class="also">Also apply changes to:${others.map((l) => `<button class="${ui.also.has(l.key) ? "on" : ""}" data-also="${esc(l.key)}">${esc(shown(l.key))}</button>`).join("")}</div>` : ""}
+    ${body ? `<div class="sections">${body}</div>` : `<div class="empty"><p>Nothing matches “${esc(ui.q)}”.</p></div>`}</div>`;
+}
+
+function controlRow(acct, win, w, c, compact) {
+  const v = (w.v || {})[c.id];
+  const o = stateOf(acct, win, c.id);
+  const val = o && o.state === "pending" && o.value !== undefined ? o.value : v;
+  const d = `data-acct="${esc(acct)}" data-w="${esc(win)}" data-id="${esc(c.id)}" data-kind="${esc(c.kind)}"`;
+  const st = o ? `<span class="st ${o.state}" title="${esc(o.msg || "")}">${o.state === "ok" ? ICON.ok : o.state === "fail" ? ICON.x : ""}</span>` : `<span class="st"></span>`;
+  const pinned = (pins[acct] || []).includes(win + "\u0001" + c.id);
+  const pin = compact ? "" : `<button class="pin ${pinned ? "on" : ""}" data-pin ${d} title="${pinned ? "Unpin from" : "Pin to"} the overview card">${ICON.pin}</button>`;
+  const label = `<div class="lbl"><b>${esc(c.name)}</b>${c.desc && !compact ? `<small>${esc(c.desc)}</small>` : ""}</div>`;
+  let ctl;
+  switch (c.kind) {
+    case "Label": case "Paragraph":
+      if (val == null || val === "") return "";
+      return `<div class="row text">${c.kind === "Paragraph" ? `<div class="lbl"><b>${esc(c.name)}</b><small>${esc(val)}</small></div>` : `<div class="lbl">${esc(val)}</div>`}</div>`;
+    case "Progress": case "Divider": return "";
+    case "Toggle": ctl = `<button class="sw ${val === true ? "on" : ""}" data-set ${d} aria-pressed="${val === true}" aria-label="${esc(c.name)}"></button>`; break;
+    case "Slider": {
+      const n = Number(val) || 0;
+      ctl = `<input type="range" min="${esc(c.min ?? 0)}" max="${esc(c.max ?? 100)}" step="${esc(c.step || 1)}" value="${esc(n)}" data-set ${d} aria-label="${esc(c.name)}">` +
+        `<input class="field num" type="number" min="${esc(c.min ?? "")}" max="${esc(c.max ?? "")}" step="${esc(c.step || 1)}" value="${esc(n)}" data-set ${d}>`;
+      break;
+    }
+    case "Dropdown": {
+      const opts = Array.isArray(c.options) ? c.options : Object.values(c.options || {});
+      if (c.multi) {
+        const on = new Set((Array.isArray(val) ? val : Object.values(val || {})).map(String));
+        ctl = `<div class="opt-chips">${opts.map((x) => `<button class="${on.has(String(x)) ? "on" : ""}" data-multi="${esc(x)}" ${d}>${esc(x)}</button>`).join("")}</div>`;
+      } else {
+        const has = opts.map(String).includes(String(val));
+        ctl = `<select class="field" data-set ${d} aria-label="${esc(c.name)}">${has ? "" : `<option selected>${esc(val ?? "—")}</option>`}${opts.map((x) => `<option ${String(x) === String(val) ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>`;
+      }
+      break;
+    }
+    case "Input": ctl = `<input class="field" value="${esc(val ?? "")}" data-set ${d} aria-label="${esc(c.name)}" placeholder="Type, then Enter">`; break;
+    case "Keybind": {
+      const listening = ui.listen && ui.listen.acct === acct && ui.listen.win === win && ui.listen.id === c.id;
+      ctl = `<button class="btn sm key ${listening ? "listen" : ""}" data-key ${d}>${listening ? "Press a key…" : esc(val || "None")}</button>`; break;
+    }
+    case "ColorPicker": ctl = `<input type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(val || "") ? val : "#ffffff")}" data-set ${d} aria-label="${esc(c.name)}">`; break;
+    case "Button": ctl = `<button class="btn sm" data-press ${d}>Run</button>`; break;
+    default: return "";
+  }
+  return `<div class="row">${label}<div class="ctl">${st}${ctl}${pin}</div></div>`;
+}
+
+function viewBoards() {
+  const b = store.boards && store.boards.boards;
+  const mine = new Set(linked().map((l) => shown(l.key).toLowerCase()));
+  if (!b) return `<div class="wrap"><div class="head"><div class="grow"><h1>Global boards</h1></div></div><div class="empty"><p>No boards read yet. A Funky Friday account reads them every couple of minutes.</p></div></div>`;
+  return `<div class="wrap"><div class="head"><div class="grow"><h1>Global boards</h1><p>Funky Friday's in-game leaderboards${store.boards.t ? ", read " + ago(store.boards.t) : ""}.</p></div></div>
+    <div class="boards">${Object.values(b).map((bd) => {
+      const rows = (Array.isArray(bd.rows) ? bd.rows : Object.values(bd.rows || {})).slice(0, 25);
+      return `<div class="section"><h3>${esc(bd.title)}</h3>${rows.length ? `<table>${rows.map((r) =>
+        `<tr class="${mine.has(String(r.n).toLowerCase()) ? "mine" : ""}"><td>${esc(r.r)}</td><td>${esc(r.n)}</td><td>${esc(r.v)}</td></tr>`).join("")}</table>` : `<div class="row text">Empty right now</div>`}</div>`;
+    }).join("")}</div></div>`;
+}
+
+// ---------- toasts ----------
+function toast(title, msg, good) {
+  const el = document.createElement("div");
+  el.className = "toast" + (good ? " ok" : "");
+  el.innerHTML = `<b>${esc(title)}</b>${msg ? `<span class="muted">${esc(msg)}</span>` : ""}`;
+  $("#toasts").appendChild(el);
+  setTimeout(() => el.remove(), good ? 3000 : 6000);
+}
+
+// ---------- input ----------
+function targets(acct) { return [acct, ...[...ui.also].filter((k) => k !== acct && ui.view === "acct")]; }
+function setFrom(el, value) {
+  const { acct, w, id, kind } = el.dataset;
+  sendMany(targets(acct), { op: "set", window: w, id, kind, value });
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button, a");
+  if (!t) return;
+  const ds = t.dataset;
+  if (ds.go) { ui.view = ds.go; ui.q = ""; schedule(); }
+  else if (ds.open) { ui.view = "acct"; ui.acct = ds.open; ui.win = null; ui.tab = null; ui.q = ""; ui.also.clear(); $("#main").scrollTop = 0; schedule(); }
+  else if (ds.win) { ui.win = ds.win; ui.tab = null; schedule(); }
+  else if (ds.tab) { ui.tab = ds.tab; ui.q = ""; schedule(); }
+  else if (ds.also) { ui.also.has(ds.also) ? ui.also.delete(ds.also) : ui.also.add(ds.also); schedule(); }
+  else if (ds.sel) { ui.sel.has(ds.sel) ? ui.sel.delete(ds.sel) : ui.sel.add(ds.sel); schedule(); }
+  else if (t.hasAttribute("data-selall")) { const L = linked(); if (ui.sel.size >= L.length) ui.sel.clear(); else L.forEach((l) => ui.sel.add(l.key)); schedule(); }
+  else if (t.hasAttribute("data-clearsel")) { ui.sel.clear(); schedule(); }
+  else if (ds.bulk) { sendMany([...ui.sel], { op: ds.bulk }); }
+  else if (ds.op) { send(ds.acct, { op: ds.op }); }
+  else if (t.hasAttribute("data-signout")) signOut();
+  else if (t.hasAttribute("data-pin")) {
+    const k = ds.w + "\u0001" + ds.id, list = pins[ds.acct] || (pins[ds.acct] = []);
+    const i = list.indexOf(k); i >= 0 ? list.splice(i, 1) : list.push(k);
+    lsSet("catn.pins", pins); schedule();
+  }
+  else if (t.hasAttribute("data-press")) sendMany(targets(ds.acct), { op: "press", window: ds.w, id: ds.id, kind: "Button" });
+  else if (t.hasAttribute("data-key")) { ui.listen = { acct: ds.acct, win: ds.w, id: ds.id, el: ds }; schedule(); }
+  else if (ds.multi !== undefined) {
+    const w = ((store.menus || {})[ds.acct] || {})[ds.w] || {};
+    const cur = new Set((Array.isArray((w.v || {})[ds.id]) ? w.v[ds.id] : Object.values((w.v || {})[ds.id] || {})).map(String));
+    cur.has(ds.multi) ? cur.delete(ds.multi) : cur.add(ds.multi);
+    setFrom(t, [...cur]);
+  }
+  else if (t.matches(".sw[data-set]")) setFrom(t, !t.classList.contains("on"));
+});
+document.addEventListener("change", (e) => {
+  const el = e.target;
+  if (!el.matches("[data-set]")) return;
+  if (el.type === "range" || el.type === "number") { const n = Number(el.value); if (Number.isFinite(n)) setFrom(el, n); }
+  else if (el.tagName === "SELECT" || el.type === "color") setFrom(el, el.value);
+  el.blur();
+});
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (el.id === "q") { ui.q = el.value; const pos = el.selectionStart; render(); const q = $("#q"); if (q) { q.focus(); q.setSelectionRange(pos, pos); } }
+  else if (el.type === "range") { const num = el.parentElement.querySelector(".num"); if (num) num.value = el.value; }
+});
+document.addEventListener("keydown", (e) => {
+  if (ui.listen) {
+    e.preventDefault();
+    const l = ui.listen; ui.listen = null;
+    if (e.key !== "Escape") sendMany(targets(l.acct), { op: "set", window: l.win, id: l.id, kind: "Keybind", value: robloxKey(e) });
+    schedule(); return;
+  }
+  const el = e.target;
+  if (e.key === "Enter" && el.matches("input.field[data-set]:not(.num)")) { setFrom(el, el.value); el.blur(); }
+  if (e.key === "/" && ui.view === "acct" && document.activeElement === document.body) { e.preventDefault(); const q = $("#q"); if (q) q.focus(); }
+});
+document.addEventListener("pointerdown", (e) => { if (e.target.type === "range") e.target.dataset.drag = "1"; });
+document.addEventListener("pointerup", () => document.querySelectorAll("[data-drag]").forEach((el) => delete el.dataset.drag));
+
+// browser key -> Roblox KeyCode name
+function robloxKey(e) {
+  const c = e.code, digits = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+  if (/^Key[A-Z]$/.test(c)) return c.slice(3);
+  if (/^Digit\d$/.test(c)) return digits[+c.slice(5)];
+  if (/^Numpad\d$/.test(c)) return "Keypad" + digits[+c.slice(6)];
+  if (/^F\d+$/.test(c)) return c;
+  const map = { ShiftLeft: "LeftShift", ShiftRight: "RightShift", ControlLeft: "LeftControl", ControlRight: "RightControl", AltLeft: "LeftAlt", AltRight: "RightAlt",
+    Space: "Space", Tab: "Tab", Enter: "Return", CapsLock: "CapsLock", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+    Insert: "Insert", Delete: "Delete", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown", Backquote: "Backquote", Minus: "Minus",
+    Equal: "Equals", BracketLeft: "LeftBracket", BracketRight: "RightBracket", Backslash: "BackSlash", Semicolon: "Semicolon", Quote: "Quote",
+    Comma: "Comma", Period: "Period", Slash: "Slash" };
+  return map[c] || e.key.toUpperCase();
+}
+
+// ---------- sign-in ----------
+function renderLogin() {
+  if (DEMO || auth) { $("#login").innerHTML = ""; return; }
+  const key = lsGet("catn.apiKey", "");
+  $("#login").innerHTML = `<div class="login"><form id="lf">
+    <img src="cat.png" alt=""><h1>Catn Control</h1><p>Sign in with your Firebase login. Only it can send orders.</p>
+    <label>Web API key<input class="field" name="key" value="${esc(key)}" placeholder="Firebase → Project settings → General" required autocomplete="off" spellcheck="false"></label>
+    <label>Email<input class="field" name="email" type="email" required autocomplete="username"></label>
+    <label>Password<input class="field" name="pw" type="password" required autocomplete="current-password"></label>
+    <div class="err" id="lerr"></div>
+    <button class="btn primary" type="submit">Sign in</button></form></div>`;
+  $("#lf").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target, btn = f.querySelector("button");
+    btn.disabled = true; btn.textContent = "Signing in…"; $("#lerr").textContent = "";
+    try {
+      lsSet("catn.apiKey", f.key.value.trim());
+      await signIn(f.key.value.trim(), f.email.value.trim(), f.pw.value);
+      renderLogin(); render();
+    } catch (err) { $("#lerr").textContent = err.message; btn.disabled = false; btn.textContent = "Sign in"; }
+  });
+}
+
+// ---------- demo data (open with ?demo) ----------
+function demoAnswer(id, o) {
+  setTimeout(() => {
+    const bad = o.op === "set" && o.kind === "Slider" && Number(o.value) > 9;
+    store.acks = C.applyEvent(store.acks, "/" + o.acct + "/" + id, bad ? { ok: false, err: "out of range" } : { ok: true, value: o.value }, "put");
+    if (!bad && o.op === "set") store.menus = C.applyEvent(store.menus, "/" + o.acct + "/" + o.window + "/v/" + o.id, o.value, "put");
+    schedule();
+  }, 600 + Math.random() * 500);
+}
+function loadDemo() {
+  const now = Date.now(), s = Math.floor(now / 1000);
+  const ff = [
+    { id: "ff_pair_on", kind: "Toggle", name: "Duo farm", tab: "Farm", section: "Duo", desc: "Two accounts take turns winning on the same stage." },
+    { id: "ff_winner", kind: "Input", name: "Winner account", tab: "Farm", section: "Duo" },
+    { id: "ff_diff", kind: "Dropdown", name: "Difficulty", tab: "Farm", section: "Duo", options: ["Easy", "Normal", "Hard", "Expert"] },
+    { id: "Farm|Duo|Status", kind: "Paragraph", name: "Status", tab: "Farm", section: "Duo" },
+    { id: "ff_acc", kind: "Slider", name: "Accuracy", tab: "Autoplay", section: "Timing", min: 1, max: 10, step: 1, desc: "How close to perfect each note lands." },
+    { id: "ff_auto", kind: "Toggle", name: "Autoplay", tab: "Autoplay", section: "Timing" },
+    { id: "ff_key", kind: "Keybind", name: "Toggle key", tab: "Autoplay", section: "Timing" },
+    { id: "ff_extras", kind: "Dropdown", name: "Extras", tab: "Misc", section: "Fun", multi: true, options: ["Hide notes", "Mute", "FPS cap"] },
+    { id: "ff_color", kind: "ColorPicker", name: "Note colour", tab: "Misc", section: "Fun" },
+    { id: "Misc|Server|Rejoin now", kind: "Button", name: "Rejoin now", tab: "Misc", section: "Server" },
+  ];
+  const v = (on, st) => ({ ff_pair_on: on, ff_winner: "catnba", ff_diff: "Hard", "Farm|Duo|Status": st, ff_acc: 8, ff_auto: true, ff_key: "F", ff_extras: ["Mute"], ff_color: "#eaa06c" });
+  store.accounts = {
+    catnba: { n: "catnba", g: "Funky Friday", w: 1832, p: 51244, t: s - 12, st: "in", pl: 6447798030, j: "x", rt: s - 3600, rw: 41 },
+    getcatnhb: { n: "getcatnhb", g: "Funky Friday", w: 1790, p: 49810, t: s - 20, st: "in", pl: 6447798030, j: "x", rt: s - 3600, rw: 40 },
+    tabbyfarm: { n: "tabbyfarm", g: "Anime Battle Arena", w: 12, p: 0, t: s - 4000, st: "left" },
+  };
+  store.menus = {
+    catnba: { "Funky Friday": { title: "Funky Friday", t: now - 5000, layout: ff, v: v(true, "on the pad, holding it until the other account gets here") }, "Catn Hub": { title: "Catn Hub", t: now - 8000, layout: [{ id: "hub_hop", kind: "Toggle", name: "Smart server hop", tab: "Hub", section: "Servers" }], v: { hub_hop: false } } },
+    getcatnhb: { "Funky Friday": { title: "Funky Friday", t: now - 3000, layout: ff, v: v(true, "round 14 · losing on purpose") } },
+    tabbyfarm: { "Anime Battle Arena": { title: "Anime Battle Arena", t: now - 4000000, layout: [{ id: "aba_farm", kind: "Toggle", name: "Auto farm", tab: "Farm", section: "" }], v: { aba_farm: false } } },
+  };
+  store.boards = { t: s - 300, boards: { WeeklyWins: { title: "Weekly Wins", rows: [{ r: 1, n: "someone", v: "4,210" }, { r: 2, n: "catnba", v: "3,980" }, { r: 3, n: "getcatnhb", v: "3,911" }] }, WeeklyScore: { title: "Weekly Score", rows: [{ r: 1, n: "player9", v: "92M" }] } } };
+  conn = "live";
+}
+
+// ---------- start ----------
+if (DEMO) loadDemo();
+else { stream("accounts", "accounts"); stream("menus", "menus"); stream("acks", "acks"); stream("boards/ff", "boards"); }
+renderLogin();
+render();
+setInterval(schedule, 15000); // keeps "seen 2m ago" and online dots fresh
+</script>
+</body>
+</html>
