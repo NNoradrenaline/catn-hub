@@ -1910,6 +1910,36 @@ do
                 task.wait(45) -- refresh often so the server id the bot hands out stays current across hops
             end
         end)
+        -- shortcut: one-off survey of the lobby's global boards so the bot's reader can be written; remove once it is.
+        if STATS_DB ~= "" then
+            task.delay(20, function()
+                pcall(function()
+                    local res = req({Url = STATS_DB .. "boards/ffraw/t.json", Method = "GET"})
+                    local last = res and tonumber(res.Body)
+                    if last and os.time() - last < 600 then return end -- someone surveyed recently
+                    local guis = {}
+                    local function scan(root)
+                        for _, g in ipairs(root:GetDescendants()) do
+                            if (g:IsA("SurfaceGui") or g:IsA("BillboardGui")) and #guis < 16 then
+                                local texts, hit = {}, false
+                                for _, d in ipairs(g:GetDescendants()) do
+                                    if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" and #texts < 120 then
+                                        texts[#texts + 1] = d:GetFullName():sub(#g:GetFullName() + 2) .. " = " .. d.Text:sub(1, 40)
+                                        if d.Text:lower():find("win") or d.Text:lower():find("score") or d.Text:lower():find("weekly") then hit = true end
+                                    end
+                                end
+                                if hit then guis[#guis + 1] = {path = g:GetFullName(), adornee = g:IsA("SurfaceGui") and g.Adornee and g.Adornee:GetFullName() or "", texts = texts} end
+                            end
+                        end
+                    end
+                    scan(workspace)
+                    local pg = plr:FindFirstChild("PlayerGui")
+                    if pg then scan(pg) end
+                    req({Url = STATS_DB .. "boards/ffraw.json", Method = "PUT", Headers = {["Content-Type"] = "application/json"},
+                        Body = HttpService:JSONEncode({t = os.time(), by = plr.Name, guis = guis})})
+                end)
+            end)
+        end
     end
 end
 
