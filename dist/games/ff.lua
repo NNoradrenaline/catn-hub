@@ -377,7 +377,7 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.6",
+local window = BPUI:CreateWindow({Version = "1.8.7",
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1923,6 +1923,7 @@ do
                 w = math.floor(realW), -- real leaderboard wins
                 p = math.floor(realP), -- real points (the game's Points currency)
                 ts = math.floor(realTS), -- real total score
+                ws = board("WinStreak"), -- current win streak (nil while the board isn't up)
                 sw = execWins, -- wins the script farmed since it was executed (this run), surviving hops
                 s = tonumber(lifetime.score) or 0, -- score the script farmed
                 rw = runStats.startedAt and (runStats.wins or 0) or nil,
@@ -2012,6 +2013,23 @@ do
     end
 end
 
+local function myBoardRow()
+    local pg = plr:FindFirstChild("PlayerGui")
+    local gg = pg and pg:FindFirstChild("GameGui")
+    local ls = gg and gg:FindFirstChild("Screen") and gg.Screen:FindFirstChild("Leaderstats")
+    local items = ls and ls:FindFirstChild("Inner") and ls.Inner:FindFirstChild("Items")
+    local inner = items and items:FindFirstChild("Inner")
+    local row = inner and inner:FindFirstChild(plr.Name)
+    return row and row:FindFirstChild("Categories")
+end
+
+-- this account's current win streak as the leaderboard shows it ("?" while the board isn't up)
+local function winStreak()
+    local cats = myBoardRow()
+    local lbl = cats and cats:FindFirstChild("WinStreak")
+    return lbl and lbl.Text ~= "" and lbl.Text or "?"
+end
+
 -- ---------- Discord bot: online + instant commands over the gateway, REST polling as a fallback ----------
 local API = "https://discord.com/api/v10"
 local botReq = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
@@ -2051,13 +2069,15 @@ if botReq then
             if not pairCfg.on then
                 send(plr.Name .. ": duo farm is OFF")
             elseif runStats.startedAt then
-                send(string.format("%s: ON as %s, running %s, wins %d, score %s", plr.Name, role(),
-                    fmtDur(os.time() - runStats.startedAt), runStats.wins or 0, commas(sessionScore)))
+                send(string.format("%s: ON as %s, running %s, wins %d, score %s, streak %s", plr.Name, role(),
+                    fmtDur(os.time() - runStats.startedAt), runStats.wins or 0, commas(sessionScore), winStreak()))
             else
                 send(plr.Name .. ": ON as " .. role() .. ", starting up")
             end
         elseif cmd == "stats" then
-            send(string.format("%s: lifetime wins %s, total score %s", plr.Name, commas(lifetime.wins or 0), commas(lifetime.score or 0)))
+            send(string.format("%s: lifetime wins %s, total score %s, win streak %s", plr.Name, commas(lifetime.wins or 0), commas(lifetime.score or 0), winStreak()))
+        elseif cmd == "streak" or cmd == "winstreak" then
+            send(plr.Name .. ": win streak " .. winStreak())
         elseif cmd == "rejoin" or cmd == "hop" or cmd == "reconnect" then
             send(plr.Name .. ": rejoining")
             pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId, plr) end)
@@ -2174,16 +2194,6 @@ local function parseCount(t)
     if not num then return nil end
     local mult = ({k = 1e3, m = 1e6, b = 1e9})[suffix:lower()] or 1
     return (tonumber(num) or 0) * mult
-end
-
-local function myBoardRow()
-    local pg = plr:FindFirstChild("PlayerGui")
-    local gg = pg and pg:FindFirstChild("GameGui")
-    local ls = gg and gg:FindFirstChild("Screen") and gg.Screen:FindFirstChild("Leaderstats")
-    local items = ls and ls:FindFirstChild("Inner") and ls.Inner:FindFirstChild("Items")
-    local inner = items and items:FindFirstChild("Inner")
-    local row = inner and inner:FindFirstChild(plr.Name)
-    return row and row:FindFirstChild("Categories")
 end
 
 -- Wins only ever go up, so remember the highest value seen: a leaderboard rebuild that briefly shows 0 and then

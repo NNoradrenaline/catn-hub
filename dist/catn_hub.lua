@@ -4612,6 +4612,11 @@ local function GET_SOURCE(key)
     return SOURCES[key]
 end
 
+local bootEnv = (getgenv and getgenv()) or _G
+if bootEnv.__CATN_HUB_BOOTING and os.clock() - bootEnv.__CATN_HUB_BOOTING < 60 then
+    return -- a second queued copy of the loader (two teleport queues) would race this one
+end
+bootEnv.__CATN_HUB_BOOTING = os.clock()
 print("[catn hub] starting")
 local hubOk, hubRes = xpcall(function()
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -4763,7 +4768,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.17.4"
+local HUB_VERSION = "1.17.5"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -4811,7 +4816,7 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.8.6",
+        Version = "1.8.7",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
     {
@@ -5101,18 +5106,21 @@ BPUI.DefaultStartClosed = function() return not autoOpenToggle:Get() end
 
 local comeBack = {on = true, loader = type(LOADER) == "string" and LOADER or ""}
 local canQueue = type(queue_on_teleport) == "function"
+-- Queued up front, not when a teleport starts: queuing at TeleportState.Started races the teleport (sometimes too
+-- late to run at all) and Started can fire twice on one hop, landing two copies in the new server.
+local function requeue()
+    if not canQueue then return end
+    if type(clear_teleport_queue) == "function" then pcall(clear_teleport_queue) end
+    if comeBack.on and comeBack.loader:gsub("%s", "") ~= "" then pcall(queue_on_teleport, comeBack.loader) end
+end
 local comeBackToggle = session:Toggle({Name = "Come back after a teleport", Icon = "refresh-cw", Default = true, Flag = "come_back",
     Desc = "Runs the hub again in the new server, so a restart or rejoin doesn't stop your farm",
-    Callback = function(v) comeBack.on = v == true end})
+    Callback = function(v) comeBack.on = v == true requeue() end})
 if not canQueue then comeBackToggle:Lock() end
 session:Input({Name = "Your loader line", Placeholder = "loadstring(game:HttpGet(...))()", Default = comeBack.loader, Flag = "come_back_loader",
     Desc = "The line you run to start the hub", DependsOn = comeBackToggle,
-    Callback = function(text) comeBack.loader = tostring(text or "") end})
-table.insert(win.Conns, plr.OnTeleport:Connect(function(teleportState)
-    if teleportState ~= Enum.TeleportState.Started or not comeBack.on or not canQueue then return end
-    if comeBack.loader:gsub("%s", "") == "" then return end
-    pcall(queue_on_teleport, comeBack.loader)
-end))
+    Callback = function(text) comeBack.loader = tostring(text or "") requeue() end})
+requeue()
 session:Button({Name = "Rejoin", Icon = "refresh-cw", Desc = "Leaves and comes straight back to this server", ButtonText = "Rejoin", Callback = function()
     win:Dialog({Title = "Rejoin this server?", Content = "You'll leave the game and come straight back. Anything unsaved is lost.",
         Buttons = {{Text = "Cancel"}, {Text = "Rejoin", Style = "Primary", Callback = rejoin}}})
@@ -5285,6 +5293,7 @@ fx:Button({Name = "Dialog", ButtonText = "Open", Callback = function()
 end})
 
 end, function(e) return tostring(e) .. "\n" .. debug.traceback() end)
+bootEnv.__CATN_HUB_BOOTING = nil
 if not hubOk then
     warn("[catn hub] failed to start: " .. tostring(hubRes))
 end

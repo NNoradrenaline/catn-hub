@@ -214,6 +214,7 @@ async function remoteAccounts() {
       totalScore: Number(d.ts) || 0,
       scriptWins: Number(d.sw) || 0,
       scriptScore: Number(d.s) || 0,
+      winStreak: d.ws != null ? Number(d.ws) || 0 : null,
       since: 0,
       lastSeen: t,
       online: now - t < ONLINE_REMOTE,
@@ -246,6 +247,7 @@ async function firebaseAccounts() {
         totalScore: Number(d.ts) || 0,
         scriptWins: Number(d.sw) || 0,
         scriptScore: Number(d.s) || 0,
+        winStreak: d.ws != null ? Number(d.ws) || 0 : null,
         since: 0,
         lastSeen: t,
         online: now - t < ONLINE_REMOTE && d.st !== "left",
@@ -366,7 +368,7 @@ function accountEmbed(accts, query) {
       { name: "💰 Points", value: abbrev(a.points), inline: true },
       { name: "📈 Total score", value: abbrev(a.totalScore), inline: true },
       { name: "🤖 Farmed by script", value: `${a.scriptWins} wins · ${abbrev(a.scriptScore)}`, inline: true },
-      { name: ZW, value: ZW, inline: true },
+      { name: "🔥 Win streak", value: a.winStreak != null ? String(a.winStreak) : "—", inline: true },
       { name: ZW, value: ZW, inline: true }
     );
   if (a.run)
@@ -458,6 +460,7 @@ function compareEmbed(a, b) {
         row("💰 Points", (x) => abbrev(x.points)),
         row("📈 Total score", (x) => abbrev(x.totalScore)),
         row("🤖 Script wins", (x) => x.scriptWins),
+        row("🔥 Win streak", (x) => (x.winStreak != null ? x.winStreak : "—")),
         row("🟢 Status", (x) => (x.online ? "online" : "offline")),
         row("🎮 Game", (x) => (x.game ? esc(x.game) : "—"))
       )

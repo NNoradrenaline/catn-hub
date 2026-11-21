@@ -96,7 +96,10 @@ ok(B.editDistance("kitten", "sitting") === 3, "edit distance");
 // --- compare ---
 const ce = B.compareEmbed(acct({ name: "A", wins: 10 }), acct({ name: "B", wins: 4 }));
 ok(/A leads by \*\*6\*\* wins/.test(desc(ce)), "compare lead");
-ok(fields(ce).length === 6, "compare rows");
+ok(fields(ce).length === 7, "compare rows");
+// win streak: shown when the script reports it, a dash when an older script did not
+ok(hasField(B.accountEmbed([acct({ name: "hot", winStreak: 12 })], "hot"), /Win streak[\s\S]*12/), "card shows win streak");
+ok(hasField(B.accountEmbed([acct({ name: "old" })], "old"), /Win streak[\s\S]*—/), "card shows a dash with no streak");
 
 // --- buttons carry the exact name ---
 const btn = B.cardButtons("abtestas24").toJSON();

@@ -91,7 +91,47 @@
     return "o" + nowMs.toString(36) + seq.toString(36).padStart(2, "0") + Math.random().toString(36).slice(2, 6);
   }
 
-  const api = { encodeKey, applyEvent, isOnline, windowAlive, groupLayout, statusText, orderOutcome, newOrderId, ORDER_TIMEOUT };
+  // an account's progress number: Funky Friday's leaderboard wins (only ever goes up), or a game script's own
+  // run counter from getgenv().CatnRun (kills, songs...), which restarts at 0 every time the script runs
+  function metricOf(a) {
+    if (!a) return null;
+    if (a.w != null) return { m: "wins", v: Number(a.w) || 0 };
+    if (a.rn != null) return { m: String(a.rl || "progress"), v: Number(a.rn) || 0 };
+    return null;
+  }
+
+  // How much `metric` went up after fromMs, from the app's minute samples [{t, d: {key: [metric, value]}}] (oldest
+  // first). Only rises count: a run counter dropping back to 0 is a restart, and for wins a dip (the leaderboard
+  // rebuilding) can't be counted again when it comes back. A gap over 10 min means the app was closed and when
+  // those gains happened is unknown, so it starts a fresh baseline. Returns the running total over time and per account.
+  const GAP_MS = 10 * 60000;
+  function gained(samples, metric, fromMs, onlyKey) {
+    let i = samples.length;
+    while (i > 0 && samples[i - 1].t >= fromMs) i--;
+    const last = {}, high = {}, by = {}, series = [];
+    let total = 0, prevT = null;
+    for (let j = Math.max(0, i - 1); j < samples.length; j++) {
+      const s = samples[j];
+      if (prevT != null && s.t - prevT > GAP_MS) for (const k in last) delete last[k];
+      prevT = s.t;
+      for (const k in s.d || {}) {
+        if (onlyKey && k !== onlyKey) continue;
+        const mv = s.d[k];
+        if (!mv || mv[0] !== metric) { delete last[k]; continue; }
+        const v = Number(mv[1]) || 0;
+        if (k in last && s.t >= fromMs) {
+          const base = metric === "wins" ? Math.max(last[k], high[k]) : last[k];
+          if (v > base) { by[k] = (by[k] || 0) + (v - base); total += v - base; }
+        }
+        high[k] = Math.max(high[k] == null ? v : high[k], v);
+        last[k] = v;
+      }
+      if (s.t >= fromMs) series.push({ t: s.t, v: total });
+    }
+    return { series, by, total };
+  }
+
+  const api = { encodeKey, applyEvent, isOnline, windowAlive, groupLayout, statusText, orderOutcome, newOrderId, ORDER_TIMEOUT, metricOf, gained };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.CatnCore = api;
 })(typeof window !== "undefined" ? window : globalThis);
