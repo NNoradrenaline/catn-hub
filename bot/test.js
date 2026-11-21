@@ -171,7 +171,7 @@ ok(JSON.stringify(B.slashToText(fakeI("compare", { first: "Viper", second: "ABte
 ok(B.slashToText(fakeI("top", {})).rest === "", "slash top default");
 ok(B.slashToText(fakeI("join", { name: " Viper " })).rest === "viper", "slash join -> text");
 ok(B.slashToText(fakeI("search", { game: "Funky Friday" })).rest === "funky friday", "slash search -> text");
-const textCmds = ["accounts", "online", "games", "search", "account", "join", "compare", "top", "global", "stats", "status", "prune", "remove", "help", "meow"];
+const textCmds = ["accounts", "online", "games", "search", "account", "join", "compare", "top", "global", "stats", "farm", "summary", "status", "prune", "remove", "help", "meow"];
 ok(B.SLASH.map((s) => s.name).join() === textCmds.join(), "every slash command maps to a text command");
 
 // --- global boards ---
@@ -207,6 +207,40 @@ const dym = B.notFound(hidRoster, "viperbmrumblez18026");
 ok(/Did you mean `catnba \(name hidden\)`/.test(dym) && !leak(dym.split("Did you mean")[1]), "did-you-mean hides names");
 ok(B.findAccount(hidRoster, "catnba").name === "ViperbmRumbleZ180266", "alias finds the account");
 ok(B.suggest(hidRoster.map((a) => a.name), "catn")[0].value === "ViperbmRumbleZ180266", "autocomplete matches alias");
+
+// --- duo farm watchdog card ---
+const nowMs = Date.now();
+const fst = { updated: nowMs - 30000, enabled: true, lastAction: "relaunched abtestas24", accounts: [
+  { role: "winner", name: "ViperbmRumbleZ180266", state: "farming", missingFor: 0 },
+  { role: "loser", name: "abtestas24", state: "offline", missingFor: 2 }] };
+const fr = [acct({ name: "ViperbmRumbleZ180266", run: { wins: 30, score: 0, startedAt: now - 3600 }, winStreak: 1140 })];
+const fe = B.farmEmbed(fst, fr);
+ok(/Watching/.test(desc(fe)) && /relaunched abtestas24/.test(desc(fe)), "farm: watching + last action");
+ok(fields(fe).some((f) => /catnba/.test(f.name) && !/Viper/.test(f.name) && /30\.0\/h/.test(f.value) && /streak 1140/.test(f.value)), "farm: wins per hour and streak");
+ok(fields(fe).some((f) => /abtestas24/.test(f.name) && /offline \(missing 2 checks\)/.test(f.value)), "farm: offline account");
+ok(!/Viper/.test(desc(B.farmEmbed({ ...fst, lastAction: "relaunched ViperbmRumbleZ180266" }, fr))), "farm: last action hides names");
+ok(/isn't running/.test(desc(B.farmEmbed(null, fr))), "farm: no watchdog");
+ok(/Paused/.test(desc(B.farmEmbed({ ...fst, enabled: false }, fr))), "farm: paused");
+ok(/may have stopped/.test(desc(B.farmEmbed({ ...fst, updated: nowMs - 600000 }, fr))), "farm: stale watchdog");
+
+// --- daily summary ---
+const sa = [acct({ name: "a", wins: 110, scriptScore: 5e6 }), acct({ name: "b", wins: 7 }), acct({ name: "new", wins: 50 })];
+const se = B.summaryEmbed(sa, { a: { w: 100, s: 1e6 }, b: { w: 7, s: 0 } }, nowMs - 86400000);
+ok(/\*\*10\*\* wins/.test(desc(se)) && fields(se).length === 1 && /\+10 wins/.test(fields(se)[0].value), "summary: only gainers, with totals");
+ok(/No snapshot yet/.test(desc(B.summaryEmbed(sa, {}, 0))), "summary: first run");
+ok(fields(B.summaryEmbed([acct({ name: "a", wins: 90 })], { a: { w: 100, s: 0 } }, 1)).length === 0, "summary: a drop isn't a negative gain");
+ok(JSON.stringify(B.snapshotOf(sa).a) === JSON.stringify({ w: 110, s: 5e6 }), "summary: snapshot");
+
+// --- one copy only ---
+const lk = require("path").join(require("os").tmpdir(), "catn-bot-test.pid");
+require("fs").writeFileSync(lk, JSON.stringify({ pid: 999999 }));
+ok(B.takeLock(lk) === true, "lock: stale lock taken over");
+require("fs").writeFileSync(lk, JSON.stringify({ pid: process.ppid }));
+ok(B.takeLock(lk) === false, "lock: a live copy blocks a second");
+require("fs").unlinkSync(lk);
+
+// --- version on the card ---
+ok(fields(B.accountEmbed([acct({ name: "v1", version: "1.8.8" })], "v1")).some((f) => /script v1\.8\.8/.test(f.value)), "card shows script version");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

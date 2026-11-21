@@ -1,7 +1,8 @@
 {
   "name": "catn-control",
   "productName": "Catn Control",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "catnMainApi": 1,
   "description": "Controls every Catn script on your accounts",
   "author": "catnba",
   "main": "main.js",
@@ -18,7 +19,7 @@
   "build": {
     "appId": "com.catn.control",
     "productName": "Catn Control",
-    "files": ["main.js", "catn-control.html", "core.js", "cat.png", "cat.ico"],
+    "files": ["main.js", "preload.js", "catn-control.html", "core.js", "cat.png", "cat.ico"],
     "directories": { "output": "release" },
     "electronDist": "node_modules/electron/dist",
     "win": { "icon": "cat.ico", "target": "nsis", "signAndEditExecutable": false },

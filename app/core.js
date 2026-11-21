@@ -131,7 +131,24 @@
     return { series, by, total };
   }
 
-  const api = { encodeKey, applyEvent, isOnline, windowAlive, groupLayout, statusText, orderOutcome, newOrderId, ORDER_TIMEOUT, metricOf, gained };
+  // Stretches in [fromMs, toMs] when an account (or, with no key, every account) wasn't reporting:
+  // samples are only taken for online accounts, so a hole longer than a few minutes is downtime
+  // (or the app being closed). Starts at the first sample in range, never before history begins.
+  const DOWN_MS = 3 * 60000;
+  function downtime(samples, fromMs, toMs, onlyKey) {
+    const out = [];
+    let prev = null;
+    for (const s of samples) {
+      if (s.t < fromMs || s.t > toMs) continue;
+      if (onlyKey && !(s.d && s.d[onlyKey])) continue;
+      if (prev != null && s.t - prev > DOWN_MS) out.push([prev, s.t]);
+      prev = s.t;
+    }
+    if (prev != null && toMs - prev > DOWN_MS) out.push([prev, toMs]);
+    return out;
+  }
+
+  const api = { encodeKey, applyEvent, isOnline, windowAlive, groupLayout, statusText, orderOutcome, newOrderId, ORDER_TIMEOUT, metricOf, gained, downtime };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.CatnCore = api;
 })(typeof window !== "undefined" ? window : globalThis);

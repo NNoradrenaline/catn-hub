@@ -377,7 +377,8 @@ local function stopWorker()
     if channel then pcall(function() channel:Fire("stop") end) end
 end
 
-local window = BPUI:CreateWindow({Version = "1.8.7",
+local FF_VERSION = "1.8.8"
+local window = BPUI:CreateWindow({Version = FF_VERSION,
     Title = "Funky Friday", Subtitle = "Autoplay",
     Icon = "music", Theme = "Void", Accent = Color3.fromRGB(143, 112, 236),
     ToggleKey = Enum.KeyCode.RightShift, ShowSettings = true, ConfigFolder = "FFAutoplay",
@@ -1357,6 +1358,22 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
     end
 
     -- Watchdog: a hop that hasn't moved us in HOP_MAX_SECONDS is abandoned and the farm restarts in this server
+    -- heartbeat: each account says which server it is in, so its partner can tell "hopped elsewhere" from "offline"
+    local function beatFile(name) return PAIR_FOLDER .. "/alive_" .. name .. ".json" end
+    supervise("heartbeat", function()
+        while alive() do
+            pcall(pwrite, beatFile(plr.Name), {job = game.JobId, time = os.time()})
+            task.wait(10)
+        end
+    end)
+    -- the partner's server when its client is alive somewhere else, or nil
+    local function partnerWhere()
+        local b = pjson(beatFile(partnerName))
+        if b and type(b.time) == "number" and os.time() - b.time < 60 and type(b.job) == "string"
+            and b.job ~= "" and b.job ~= game.JobId then return b.job end
+        return nil
+    end
+
     supervise("hop watchdog", function()
         while alive() do
             task.wait(2)
@@ -1465,9 +1482,22 @@ local function runPairFarm(winnerName, loserName, alive, setStatus, onStuck)
         local goneSince, splitSince
         while alive() and task.wait(2) do
             if isHopping then break end
-            -- partner gone for a while (a hop target can take a bit to load into) -> leave too
+            -- partner gone for a while (a hop target can take a bit to load into): go where it is if its
+            -- client is alive in another server, otherwise hold this server so the watchdog can bring it back here
             if Players:FindFirstChild(partnerName) then goneSince = nil else goneSince = goneSince or os.clock() end
-            if goneSince and os.clock() - goneSince >= PARTNER_GONE_HOP then serverHop() break end
+            if goneSince and os.clock() - goneSince >= PARTNER_GONE_HOP then
+                local where = partnerWhere()
+                if where then
+                    isHopping = true
+                    hopStartedAt = hopStartedAt or os.clock()
+                    setStatus("going to your other account's server")
+                    pcall(teleportTo, where, 15)
+                    isHopping = false
+                    goneSince = os.clock() -- the teleport didn't take: try again later
+                else
+                    setStatus("your other account is offline, holding this server for it")
+                end
+            end
             -- both seated but on different stages -> this server is a bust. One alone on a stage is just waiting.
             local mine, theirs = stageOfPlayer(plr.Name), stageOfPlayer(partnerName)
             if mine and theirs and mine ~= theirs then splitSince = splitSince or os.clock() else splitSince = nil end
@@ -1877,6 +1907,16 @@ end})
 local STATS_WEBHOOK = "https://discord.com/api/webhooks/1572814663328997406/P0LgC-184HItuVh1XFzmD87VaU8kId-e58K4pudYeN2XmRG8Vsxk7bvKbd8GXi4RmCpp"
 -- Firebase Realtime DB: one node per account (overwritten each cycle), so the bot reads everyone in one GET
 -- with no burial and no shared rate limit. Primary store; the webhook above is the fallback when this is blank.
+-- the exact win streak from the tag over our head (the leaderboard rounds big ones), or nil
+local function streakTag()
+    local ch = workspace:FindFirstChild(plr.Name)
+    local head = ch and ch:FindFirstChild("Head")
+    local streak = head and head:FindFirstChild("Streak", true)
+    local lbl = streak and streak:FindFirstChildWhichIsA("TextLabel", true)
+    local n = lbl and tonumber((lbl.Text:gsub(",", "")))
+    return n
+end
+
 local STATS_DB = "https://catn-db-default-rtdb.firebaseio.com/"
 do
     local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
@@ -1920,10 +1960,11 @@ do
             realTS = board("TotalScore") or realTS or 0
             return {
                 n = plr.Name,
+                v = FF_VERSION, -- script version, shown by the bot
                 w = math.floor(realW), -- real leaderboard wins
                 p = math.floor(realP), -- real points (the game's Points currency)
                 ts = math.floor(realTS), -- real total score
-                ws = board("WinStreak"), -- current win streak (nil while the board isn't up)
+                ws = streakTag() or board("WinStreak"), -- current win streak: exact from the head tag, else the board
                 sw = execWins, -- wins the script farmed since it was executed (this run), surviving hops
                 s = tonumber(lifetime.score) or 0, -- score the script farmed
                 rw = runStats.startedAt and (runStats.wins or 0) or nil,
@@ -2023,8 +2064,11 @@ local function myBoardRow()
     return row and row:FindFirstChild("Categories")
 end
 
--- this account's current win streak as the leaderboard shows it ("?" while the board isn't up)
+-- this account's current win streak. The tag over our head has the exact number; the leaderboard
+-- rounds big ones ("1.17k"), so it's only the fallback. "?" while neither is up.
 local function winStreak()
+    local n = streakTag()
+    if n then return tostring(n) end
     local cats = myBoardRow()
     local lbl = cats and cats:FindFirstChild("WinStreak")
     return lbl and lbl.Text ~= "" and lbl.Text or "?"
@@ -2069,10 +2113,10 @@ if botReq then
             if not pairCfg.on then
                 send(plr.Name .. ": duo farm is OFF")
             elseif runStats.startedAt then
-                send(string.format("%s: ON as %s, running %s, wins %d, score %s, streak %s", plr.Name, role(),
-                    fmtDur(os.time() - runStats.startedAt), runStats.wins or 0, commas(sessionScore), winStreak()))
+                send(string.format("%s: ON as %s, running %s, wins %d, score %s, streak %s (v%s)", plr.Name, role(),
+                    fmtDur(os.time() - runStats.startedAt), runStats.wins or 0, commas(sessionScore), winStreak(), FF_VERSION))
             else
-                send(plr.Name .. ": ON as " .. role() .. ", starting up")
+                send(plr.Name .. ": ON as " .. role() .. ", starting up (v" .. FF_VERSION .. ")")
             end
         elseif cmd == "stats" then
             send(string.format("%s: lifetime wins %s, total score %s, win streak %s", plr.Name, commas(lifetime.wins or 0), commas(lifetime.score or 0), winStreak()))

@@ -272,6 +272,22 @@ html.desk .login::before { content: ""; position: fixed; top: 0; left: 0; right:
 .chart.anim .ch-dot { animation: fadein .35s 1s both; }
 @keyframes reveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 @keyframes fadein { from { opacity: 0; transform: scale(.4); } }
+.ch-down { fill: var(--muted); opacity: .14; }
+.farm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.farm-card { display: flex; flex-direction: column; gap: 12px; margin: 0; }
+.farm-top { display: flex; align-items: center; gap: 12px; }
+.farm-top .grow { min-width: 0; }
+.farm-top b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.farm-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+.farm-kv span:nth-child(odd) { color: var(--muted); }
+.farm-kv span:nth-child(even) { font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill.warn { color: var(--warn); background: rgba(251,191,36,.13); border-color: transparent; }
+.pill.bad { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+.farm-form { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.farm-form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--sub); }
+.farm-form select { height: 32px; min-width: 200px; background: var(--el); color: var(--text); border: 1px solid var(--stroke2); border-radius: var(--r-sm); padding: 0 8px; font: inherit; font-size: 13px; }
+.farm-note { font-size: 13px; color: var(--sub); line-height: 1.5; }
+.farm-note code { background: var(--el); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
 .chart-empty { height: var(--h); display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 13px; border: 1px dashed var(--stroke2); border-radius: var(--r-sm); padding: 0 24px; }
 .spark { width: 100%; height: 28px; display: block; overflow: visible; }
 .spark .l { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
@@ -336,6 +352,7 @@ const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == n
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
 const ICON = {
+  farm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="6"/><path d="M6 12h4M8 10v4"/><circle cx="15.5" cy="11" r=".6" fill="currentColor"/><circle cx="17.5" cy="13" r=".6" fill="currentColor"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
   trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg>',
   pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M5 17h14l-2-3V5a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v9z"/></svg>',
@@ -566,9 +583,11 @@ function chartHTML(id, pts, o) {
   const ticks = [0, top / 2, top], anim = !drawnKeys.has(o.animKey);
   drawnKeys.add(o.animKey);
   chartData[id] = { pts, t0, t1, top, unit: o.unit };
+  const down = (o.down || []).map(([a, b]) => [Math.max(a, t0), Math.min(b, t1)]).filter(([a, b]) => b > a)
+    .map(([a, b]) => `<rect class="ch-down" x="${X(a).toFixed(1)}" y="0" width="${(X(b) - X(a)).toFixed(1)}" height="${h}"><title>Not reporting ${hhmm(a)}–${hhmm(b)}</title></rect>`).join("");
   return `<div class="chart${anim ? " anim" : ""}" data-chart="${id}" style="--h:${h}px" role="img" aria-label="${esc(MLABEL(o.unit))} gained since ${hhmm(t0)}: ${fmt(last.v)}">
     <div class="ch-y">${ticks.map((v) => `<span style="top:${(1 - v / top) * 100}%">${axisNum(v)}</span>`).join("")}</div>
-    <div class="ch-plot"><svg viewBox="0 0 ${W} ${h}" preserveAspectRatio="none" aria-hidden="true">${ticks.map((v) => `<line class="ch-grid" x1="0" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" vector-effect="non-scaling-stroke"/>`).join("")}<path class="ch-area" d="${d}L${X(last.t).toFixed(1)},${h}L0,${h}Z"/><path class="ch-line" d="${d}" vector-effect="non-scaling-stroke"/></svg>
+    <div class="ch-plot"><svg viewBox="0 0 ${W} ${h}" preserveAspectRatio="none" aria-hidden="true">${down}${ticks.map((v) => `<line class="ch-grid" x1="0" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" vector-effect="non-scaling-stroke"/>`).join("")}<path class="ch-area" d="${d}L${X(last.t).toFixed(1)},${h}L0,${h}Z"/><path class="ch-line" d="${d}" vector-effect="non-scaling-stroke"/></svg>
       <span class="ch-dot" style="left:${X(last.t) / W * 100}%;top:${Y(last.v) / h * 100}%"></span><div class="ch-cross"></div><div class="ch-tip"></div></div>
     <div class="ch-x"><span>${hhmm(t0)}</span><span>${hhmm((t0 + t1) / 2)}</span><span>now</span></div></div>`;
 }
@@ -646,7 +665,7 @@ function pulse() {
       if (d > 0 && Math.floor(cur.wins / 1000) > Math.floor(p.wins / 1000)) notifyUser(shown(key) + " passed " + fmt(Math.floor(cur.wins / 1000) * 1000) + " wins", "");
       if (d > 0) pushFeed('win', key, d > 1 ? 'won ' + d + ' rounds' : 'won a round');
       if (cur.online && !p.online) pushFeed('on', key, 'came online');
-      if (!cur.online && p.online) pushFeed('off', key, 'went offline');
+      if (!cur.online && p.online) { pushFeed('off', key, 'went offline'); if (p.running) notifyUser(shown(key) + " went offline", "It was running a script."); }
       if (cur.running && !p.running) pushFeed('start', key, 'started a script');
       if (!cur.running && p.running) {
         const why = cur.game !== p.game ? "it switched to another game" : !cur.online ? "the account went offline (disconnected or Roblox closed)" : "it stopped updating — likely crashed, was unloaded, or the round reset";
@@ -707,6 +726,7 @@ function palItems() {
     { label: "Leaderboard", sub: "go", run: () => { ui.view = "leaderboard"; schedule(); } },
     { label: "Global boards", sub: "go", run: () => { ui.view = "boards"; schedule(); } },
     { label: "Stats", sub: "go", run: () => { ui.view = "stats"; schedule(); } },
+    { label: "Duo farm", sub: "go", run: () => { ui.view = "farm"; schedule(); } },
     { label: "Refresh now", sub: "action", run: refresh },
     { label: "Rejoin all online", sub: "action", run: () => { const ks = linked().filter((l) => l.online).map((l) => l.key); sendMany(ks, { op: "rejoin" }); } },
     { label: "Hop all online", sub: "action", run: () => { const ks = linked().filter((l) => l.online).map((l) => l.key); if (ks.length && confirm("Hop all " + ks.length + " online accounts?")) sendMany(ks, { op: "hop" }); } },
@@ -761,7 +781,7 @@ function render() {
   held = false;
   const main = $("#main"), top = main.scrollTop;
   const fe = main.querySelector(".feed"), feTop = fe ? fe.scrollTop : 0;
-  main.innerHTML = ui.view === "acct" && ui.acct ? viewAccount() : ui.view === "boards" ? viewBoards() : ui.view === "leaderboard" ? viewLeaderboard() : ui.view === "stats" ? viewStats() : viewHome();
+  main.innerHTML = ui.view === "acct" && ui.acct ? viewAccount() : ui.view === "boards" ? viewBoards() : ui.view === "leaderboard" ? viewLeaderboard() : ui.view === "stats" ? viewStats() : ui.view === "farm" ? viewFarm() : viewHome();
   const vk = ui.view + "|" + (ui.acct || "");
   if (vk !== lastView) { lastView = vk; if (main.firstElementChild && !calm) main.firstElementChild.classList.add("view-in"); }
   animateNums(main);
@@ -774,6 +794,7 @@ function renderSide() {
   $("#nav").innerHTML =
     `<button class="${ui.view === "home" ? "on" : ""}" data-go="home">${ICON.home}Overview</button>` +
     `<button class="${ui.view === "stats" ? "on" : ""}" data-go="stats">${ICON.chart}Stats</button>` +
+    `<button class="${ui.view === "farm" ? "on" : ""}" data-go="farm">${ICON.farm}Duo farm</button>` +
     `<button class="${ui.view === "leaderboard" ? "on" : ""}" data-go="leaderboard">${ICON.medal}Leaderboard</button>` +
     `<button class="${ui.view === "boards" ? "on" : ""}" data-go="boards">${ICON.trophy}Global boards</button>`;
   $("#accts").innerHTML = linked().map((l) =>
@@ -876,7 +897,7 @@ function viewStats() {
   const games = Object.entries(byGame).sort((x, y) => y[1] - x[1]);
   const seg = (items, on, attr, label) => `<div class="seg">${items.map((x) => `<button class="${x === on ? "on" : ""}" data-${attr}="${esc(x)}">${esc(label(x))}</button>`).join("")}</div>`;
   return `<div class="wrap">
-    <div class="head"><div class="grow"><h1>Stats</h1><p>What your accounts gained, from a snapshot this app takes every minute it's open.</p></div>
+    <div class="head"><div class="grow"><h1>Stats</h1><p>What your accounts gained, from a snapshot this app takes every minute it's open. Shaded stretches: nothing was reporting (offline, or the app was closed).</p></div>
       ${ms.length > 1 ? seg(ms, m, "stm", MLABEL) : ""}${seg(Object.keys(RANGES), rg, "str", (x) => x)}</div>
     <div class="stats">
       <div class="stat"><small>${esc(MLABEL(m))} gained · ${rg}</small>${numHTML("st-g" + ak, g.total)}</div>
@@ -885,7 +906,7 @@ function viewStats() {
       <div class="stat"><small>Top account · ${rg}</small><b class="stat-name">${top.length ? esc(shown(top[0][0])) : "–"}</b></div>
     </div>
     <div class="panel"><div class="panel-h"><h3>${esc(MLABEL(m))} gained over time</h3>${pts.length ? `<span class="big">since ${hhmm(since)}</span>` : ""}</div>
-      ${chartHTML("stats", pts, { h: 240, unit: m, animKey: "stats" + ak, empty: "Collecting data. The graph fills in as the app watches your accounts, one point a minute while it's open." })}</div>
+      ${chartHTML("stats", pts, { h: 240, unit: m, down: C.downtime(hist, now - RANGES[rg], now), animKey: "stats" + ak, empty: "Collecting data. The graph fills in as the app watches your accounts, one point a minute while it's open." })}</div>
     <div class="stats-2">
       <div class="panel"><div class="panel-h"><h3>Top accounts · ${rg}</h3></div>
         ${top.length ? barsHTML(top.map(([k, v]) => ({ label: avatarHTML(k, acctOf(k), "sm", false) + `<span>${esc(shown(k))}</span>`, v })), "top" + ak) : `<div class="dim" style="font-size:13px">No account has gained ${esc(m)} in this window yet.</div>`}</div>
@@ -893,6 +914,72 @@ function viewStats() {
         ${games.length ? barsHTML(games.map(([gn, v]) => ({ label: `<span>${esc(gn)}</span>`, v })), "games") : `<div class="dim" style="font-size:13px">No accounts online.</div>`}</div>
     </div></div>`;
 }
+
+// ---------- duo farm: the watchdog's control.json / status.json, through the app's bridge ----------
+let farm = null, farmAlerted = {};
+const farmBridge = typeof window.catnFarm === "object" && window.catnFarm;
+function demoFarm() {
+  const t = Date.now();
+  return { control: { enabled: true, winner: "1", loser: "2" }, status: { updated: t - 20000, enabled: true, lastAction: "relaunched abtestas24", pid: 4242,
+    realAccounts: [{ id: "1", name: "ViperbmRumbleZ180266" }, { id: "2", name: "abtestas24" }, { id: "3", name: "scarn_4" }],
+    accounts: [{ role: "winner", id: "1", name: "ViperbmRumbleZ180266", pid: 39816, job: "743e6a35-be27-40c9-8d81-8940257c9781", state: "farming", missingFor: 0 },
+      { role: "loser", id: "2", name: "abtestas24", pid: null, job: "", state: "offline", missingFor: 1 }] } };
+}
+async function pollFarm() {
+  try { farm = farmBridge ? await farmBridge.status() : DEMO ? demoFarm() : null; } catch (e) { farm = null; }
+  farmAlerts();
+  if (ui.view === "farm") schedule();
+}
+// desktop alerts: a farm account dropping, the watchdog going quiet, a logged-out account
+function farmAlerts() {
+  const st = farm && farm.status;
+  if (!st || !st.enabled) return;
+  const once = (k, on, title, body) => { if (on && !farmAlerted[k]) notifyUser(title, body); farmAlerted[k] = on; };
+  once("stale", Date.now() - st.updated > 180000, "The farm watchdog stopped", "It hasn't checked on the accounts for a few minutes.");
+  once("login", /logged out/.test(st.lastAction || ""), "A farm account is logged out", st.lastAction || "");
+  for (const a of st.accounts || []) once("off:" + a.name, a.state === "offline", a.name + " dropped out of the duo farm", "The watchdog is bringing it back.");
+}
+function viewFarm() {
+  if (!farm) return `<div class="wrap"><div class="head"><div class="grow"><h1>Duo farm</h1></div></div>
+    <div class="panel farm-note">${farmBridge ? "Loading…" : "The duo farm panel works in the Catn Control app on the PC that runs the farm."}</div></div>`;
+  const st = farm.status, ctl = farm.control || {};
+  const age = st ? Math.round((Date.now() - st.updated) / 1000) : null;
+  const running = st && age < 180;
+  const accs = (st && st.realAccounts) || [];
+  const opt = (sel) => `<option value="">Pick an account…</option>` + accs.map((x) => `<option value="${esc(x.id)}" ${x.id === sel ? "selected" : ""}>${esc(x.name)}</option>`).join("");
+  const banner = !st ? `<b style="color:var(--bad)">The watchdog isn't running.</b> It starts with Windows (the <code>Catn Farm Watchdog</code> task), or run <code>node watchdog.js</code> in <code>%LOCALAPPDATA%\CatnFarm</code>.`
+    : !running ? `<b style="color:var(--warn)">The watchdog last checked ${ago(st.updated / 1000)}.</b> It may have stopped, or Real isn't open.`
+    : !ctl.enabled ? `<b>Paused.</b> The watchdog is up but isn't relaunching anything.`
+    : `<b style="color:var(--ok)">Keeping the farm running.</b> Checked ${ago(st.updated / 1000)}${st.lastAction ? ` · last action: ${esc(st.lastAction)}` : ""}`;
+  const now = nowSec();
+  const card = (w) => {
+    const key = C.encodeKey(w.name), a = acctOf(key) || {};
+    const pill = w.state === "farming" ? `<span class="pill on">farming</span>` : w.state === "offline" ? `<span class="pill bad">offline</span>` : `<span class="pill warn">${esc(w.state)}</span>`;
+    const hrs = a.rt ? Math.max((now - a.rt) / 3600, 1 / 60) : 0;
+    const kv = [["Role", w.role === "winner" ? "wins every round" : "loses on purpose"], ["Roblox", w.pid ? "pid " + w.pid : "—"], ["Server", w.job ? w.job.slice(0, 8) + "…" : "—"]];
+    if (a.w != null) kv.push(["Wins", fmt(a.w) + (a.ws != null ? " · streak " + fmt(a.ws) : "")]);
+    if (a.rt) kv.push(["This run", fmt(a.rw || 0) + " wins · " + ((a.rw || 0) / hrs).toFixed(1) + "/h"]);
+    if (w.missingFor) kv.push(["Missing", w.missingFor + " check" + (w.missingFor > 1 ? "s" : "")]);
+    return `<div class="panel farm-card"><div class="farm-top">${avatarHTML(key, a, "", w.state === "farming")}<div class="grow"><b>${esc(w.name)}</b><span class="dim">${w.role === "winner" ? "🏆 winner" : "🎭 loser"}</span></div>${pill}</div>
+      <div class="farm-kv">${kv.map(([k, v]) => `<span>${esc(k)}</span><span>${esc(v)}</span>`).join("")}</div>
+      <div><button class="btn" data-farm-relaunch="${esc(w.id || "")}" ${farmBridge && w.id ? "" : "disabled"}>${ICON.refresh}Relaunch</button></div></div>`;
+  };
+  return `<div class="wrap">
+    <div class="head"><div class="grow"><h1>Duo farm</h1><p>Two accounts in one Funky Friday server, one winning every round. The watchdog relaunches either one through Real if it drops.</p></div>
+      <button class="btn ${ctl.enabled ? "danger" : ""}" data-farm-toggle ${farmBridge ? "" : "disabled"}>${ctl.enabled ? "Pause the farm" : "Keep the farm running"}</button></div>
+    <div class="panel farm-note">${banner}</div>
+    ${st && st.accounts && st.accounts.length ? `<div class="farm-grid">${st.accounts.map(card).join("")}</div>` : ""}
+    <div class="panel"><div class="panel-h"><h3>Accounts</h3></div>
+      <div class="farm-form"><label>Winner<select id="farm-w">${opt(ctl.winner)}</select></label><label>Loser<select id="farm-l">${opt(ctl.loser)}</select></label>
+      <button class="btn" data-farm-save ${farmBridge && accs.length ? "" : "disabled"}>${ICON.ok}Save</button></div>
+      ${accs.length ? "" : `<p class="farm-note">The account list comes from Real through the watchdog; it shows up once the watchdog has run with Real open.</p>`}</div>
+  </div>`;
+}
+async function farmControl(patch) {
+  if (!farmBridge) return;
+  try { const c = await farmBridge.control(patch); farm = { ...(farm || {}), control: c }; schedule(); } catch (e) { toast("Couldn't save", String(e && e.message || e)); }
+}
+pollFarm(); setInterval(pollFarm, 5000);
 
 function emptyLinked() {
   return `<div class="empty"><img src="cat.png" alt=""><h2>No accounts linked yet</h2>
@@ -923,7 +1010,7 @@ function viewAccount() {
     const now = Date.now(), rg = ui.acRange, g = C.gained(hist, am.m, now - RANGES[rg], key);
     prog = `<div class="panel"><div class="panel-h"><h3>${esc(MLABEL(am.m))} gained</h3><span class="big"><b>+${fmt(g.total)}</b> in the last ${rg}</span>
       <div class="seg">${Object.keys(RANGES).map((r) => `<button class="${r === rg ? "on" : ""}" data-acr="${r}">${r}</button>`).join("")}</div></div>
-      ${chartHTML("acct", toNow(g, now), { h: 150, unit: am.m, animKey: "acct|" + key + "|" + am.m + "|" + rg, empty: "Collecting data. This graph fills in as the app watches " + esc(shown(key)) + ", one point a minute." })}</div>`;
+      ${chartHTML("acct", toNow(g, now), { h: 150, unit: am.m, down: C.downtime(hist, now - RANGES[rg], now, key), animKey: "acct|" + key + "|" + am.m + "|" + rg, empty: "Collecting data. This graph fills in as the app watches " + esc(shown(key)) + ", one point a minute." })}</div>`;
   }
   return `<div class="wrap">
     <div class="head">${avatarHTML(key, a, "lg", C.isOnline(a, nowSec()))}<div class="grow"><h1>${esc(shown(key))}</h1>
@@ -1025,6 +1112,13 @@ document.addEventListener("click", (e) => {
   if (!t) return;
   const ds = t.dataset;
   if (ds.go) { ui.view = ds.go; ui.q = ""; schedule(); }
+  else if (t.hasAttribute("data-farm-toggle")) farmControl({ enabled: !((farm && farm.control) || {}).enabled });
+  else if (ds.farmRelaunch) { farmControl({ relaunch: ds.farmRelaunch }); toast("Relaunch queued", "The watchdog picks it up within a minute.", true); }
+  else if (t.hasAttribute("data-farm-save")) {
+    const w = $("#farm-w").value, l = $("#farm-l").value;
+    if (!w || !l || w === l) toast("Pick two different accounts", "One winner and one loser.");
+    else { farmControl({ winner: w, loser: l }); toast("Saved", "The watchdog uses these from its next check.", true); }
+  }
   else if (ds.open) { ui.view = "acct"; ui.acct = ds.open; ui.win = null; ui.tab = null; ui.q = ""; ui.also.clear(); $("#main").scrollTop = 0; schedule(); }
   else if (ds.win) { ui.win = ds.win; ui.tab = null; schedule(); }
   else if (ds.tab) { ui.tab = ds.tab; ui.q = ""; schedule(); }

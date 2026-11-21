@@ -1,0 +1,12 @@
+const assert = require("assert");
+const os = require("os"), path = require("path"), fs = require("fs");
+const { firstJson, takeLock } = require("./watchdog");
+assert.deepStrictEqual(firstJson('data <<<GAME-DATA\n{"value":"a|1|b"}\nGAME-DATA>>>'), { value: "a|1|b" });
+assert.strictEqual(firstJson("no json here"), null);
+const lock = path.join(os.tmpdir(), "catn-wd-test.pid");
+fs.writeFileSync(lock, JSON.stringify({ pid: 999999 }));
+assert.strictEqual(takeLock(lock), true, "a dead pid's lock is taken over");
+fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid }));
+assert.strictEqual(takeLock(lock), false, "a live pid keeps its lock");
+fs.unlinkSync(lock);
+console.log("watchdog: all tests pass");

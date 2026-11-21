@@ -68,6 +68,9 @@ async function fbFetch(subpath, opts) {
 }
 const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
 const FARM_DIR = process.env.FARM_DIR || path.join(LOCALAPPDATA, "Real", "workspace", "FFAutoFarm");
+const WATCHDOG_DIR = process.env.CATN_FARM_DIR || path.join(LOCALAPPDATA, "CatnFarm"); // the duo farm watchdog's status.json
+const SUMMARY_FILE = path.join(__dirname, "summary.json"); // morning summary: channel + last snapshot
+const SUMMARY_HOUR = 8; // local time
 const ONLINE_LOCAL = 60;
 const ONLINE_REMOTE = 150; // ~3 missed 45s refreshes
 const JOIN_FRESH = 75; // a server id newer than this is current; older may have hopped
@@ -215,6 +218,7 @@ async function remoteAccounts() {
       scriptWins: Number(d.sw) || 0,
       scriptScore: Number(d.s) || 0,
       winStreak: d.ws != null ? Number(d.ws) || 0 : null,
+      version: typeof d.v === "string" ? d.v : "",
       since: 0,
       lastSeen: t,
       online: now - t < ONLINE_REMOTE,
@@ -248,6 +252,7 @@ async function firebaseAccounts() {
         scriptWins: Number(d.sw) || 0,
         scriptScore: Number(d.s) || 0,
         winStreak: d.ws != null ? Number(d.ws) || 0 : null,
+        version: typeof d.v === "string" ? d.v : "",
         since: 0,
         lastSeen: t,
         online: now - t < ONLINE_REMOTE && d.st !== "left",
@@ -315,6 +320,8 @@ function helpEmbed() {
             "**`top`** / `top points` / `top score` — leaderboards of our accounts",
             "**`global`** / `global weekly wins` — the game's real global boards, with our accounts' positions",
             "**`stats`** — grand totals · **`status`** — bot health",
+            "**`farm`** — the duo farm watchdog: who's farming, who it's relaunching",
+            "**`summary`** — the daily summary now · **`summary here`** — post it in this channel every morning",
           ].join("\n"),
         },
         {
@@ -382,6 +389,7 @@ function accountEmbed(accts, query) {
   const meta = [];
   if (a.lastSeen) meta.push(`Last seen <t:${a.lastSeen}:R>`);
   if (a.since) meta.push(`tracking since <t:${a.since}:D>`);
+  if (a.version) meta.push(`script v${a.version}`);
   if (meta.length) embed.addFields({ name: ZW, value: meta.join(" · ") });
   const peers = a.online && a.jobId ? samePeers(accts, a) : [];
   if (peers.length) embed.addFields({ name: "🧑‍🤝‍🧑 In the same server", value: peers.map(esc).join(", ").slice(0, 1000), inline: false });
@@ -684,6 +692,79 @@ function joinEmbed(accts, query) {
   return brand(embed, a.game || (a.online ? "online" : "offline"));
 }
 
+// The duo farm watchdog's view: each account's state, plus how the farm is doing in the game.
+function farmEmbed(status, accts) {
+  const e = new EmbedBuilder().setTitle("🎮 Duo farm").setColor(COLOR);
+  if (!status || !status.updated) return brand(e.setDescription("The watchdog isn't running on this PC."), "farm");
+  const age = Math.floor((Date.now() - status.updated) / 1000);
+  const lines = [];
+  if (!status.enabled) lines.push("⏸️ **Paused**: the watchdog isn't relaunching anything.");
+  else if (age > 180) lines.push(`⚠️ The watchdog last checked ${dur(age)} ago; it may have stopped.`);
+  else lines.push(`✅ Watching, last check ${dur(age)} ago.`);
+  if (status.lastAction) lines.push("Last action: " + (status.accounts || []).reduce((t, w) => t.split(w.name).join(esc(w.name)), status.lastAction)); // names hidden like everywhere else
+  e.setDescription(lines.join("\n"));
+  const now = Math.floor(Date.now() / 1000);
+  for (const w of status.accounts || []) {
+    const a = findAccount(accts, w.name);
+    const icon = w.state === "farming" ? "🟢" : w.state === "offline" ? "🔴" : "🟡";
+    const bits = [`${icon} ${w.state}${w.missingFor ? ` (missing ${w.missingFor} checks)` : ""}`];
+    if (a && a.run && a.run.startedAt) {
+      const hrs = Math.max((now - a.run.startedAt) / 3600, 1 / 60);
+      bits.push(`${a.run.wins} wins this run · ${(a.run.wins / hrs).toFixed(1)}/h`);
+    }
+    if (a && a.winStreak != null) bits.push(`streak ${a.winStreak}`);
+    e.addFields({ name: `${w.role === "winner" ? "🏆" : "🎭"} ${esc(w.name)} (${w.role})`, value: bits.join("\n"), inline: true });
+  }
+  return brand(e, "farm");
+}
+
+// Wins and score gained since the last summary's snapshot, per account that gained anything.
+function summaryEmbed(accts, snap, since) {
+  const rows = [];
+  let wins = 0, score = 0;
+  for (const a of accts) {
+    const p = snap[a.name];
+    if (!p) continue;
+    const dw = Math.max(0, a.wins - p.w), ds = Math.max(0, a.scriptScore - p.s);
+    if (!dw && !ds) continue;
+    wins += dw;
+    score += ds;
+    rows.push({ a, dw, ds });
+  }
+  rows.sort((x, y) => y.dw - x.dw || y.ds - x.ds);
+  const e = new EmbedBuilder().setTitle("☀️ Daily summary").setColor(COLOR);
+  if (!since) return brand(e.setDescription("No snapshot yet: the first morning post sets the starting point, and gains show from the next one."), "summary");
+  e.setDescription(`Since <t:${Math.floor(since / 1000)}:f>: **${wins}** wins and **${abbrev(score)}** score across ${rows.length} account${rows.length === 1 ? "" : "s"}.`);
+  for (const r of rows.slice(0, 12))
+    e.addFields({ name: (r.a.online ? "🟢 " : "⚪ ") + esc(r.a.name), value: `+${r.dw} wins · +${abbrev(r.ds)}${r.a.winStreak != null ? ` · streak ${r.a.winStreak}` : ""}`, inline: true });
+  return brand(e, "summary");
+}
+const snapshotOf = (accts) => Object.fromEntries(accts.map((a) => [a.name, { w: a.wins, s: a.scriptScore }]));
+
+function setSummaryChannel(channelId) {
+  const st = readJson(SUMMARY_FILE) || {};
+  st.channel = channelId;
+  if (!st.at) Object.assign(st, { snap: snapshotCache || {}, at: Date.now() }); // start counting from now
+  fs.writeFileSync(SUMMARY_FILE, JSON.stringify(st));
+  return `☀️ I'll post the daily summary here every day at ${SUMMARY_HOUR}:00.`;
+}
+let snapshotCache = null;
+
+// once a minute: at SUMMARY_HOUR post the summary (once per day) and take the next snapshot
+async function summaryTick() {
+  const st = readJson(SUMMARY_FILE) || {};
+  const now = new Date(), today = now.toDateString();
+  if (!st.channel) {
+    snapshotCache = snapshotOf(await allAccounts());
+    return;
+  }
+  if (now.getHours() !== SUMMARY_HOUR || st.posted === today) return;
+  const accts = await allAccounts(true);
+  const ch = await client.channels.fetch(st.channel).catch(() => null);
+  if (ch) await ch.send({ embeds: [summaryEmbed(accts, st.snap || {}, st.at || 0)] }).catch((e) => console.error("summary failed:", e.message));
+  fs.writeFileSync(SUMMARY_FILE, JSON.stringify({ ...st, posted: today, snap: snapshotOf(accts), at: Date.now() }));
+}
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
@@ -695,6 +776,7 @@ client.once(Events.ClientReady, (c) => {
     (cmds) => console.log("slash commands registered: " + cmds.size),
     (e) => console.error("slash register failed:", e.message)
   );
+  setInterval(() => summaryTick().catch((e) => console.error("summary tick:", e.message)), 60 * 1000);
   if (FIREBASE) {
     pruneStale();
     setInterval(() => pruneStale().then(invalidateAccounts), 30 * 60 * 1000); // keep the roster tidy
@@ -723,6 +805,14 @@ async function handleCommand(word, rest) {
       const hits = (await allAccounts()).filter((a) => (a.game || "").toLowerCase().includes(rest));
       const pages = accountsEmbeds(hits, `Accounts in "${rest}"`);
       return pages.length ? { embeds: pages } : `No accounts in a game matching "${rest}".`;
+    }
+    case "farm": {
+      return { embeds: [farmEmbed(readJson(path.join(WATCHDOG_DIR, "status.json")), await allAccounts(true))] };
+    }
+    case "summary": {
+      if (rest === "here") return { setSummaryChannel: true };
+      const st = readJson(SUMMARY_FILE) || {};
+      return { embeds: [summaryEmbed(await allAccounts(true), st.snap || {}, st.at || 0)] };
     }
     case "account":
     case "acc": {
@@ -814,6 +904,7 @@ client.on(Events.MessageCreate, async (msg) => {
     reply = "Something went wrong running that — try again in a moment.";
   }
   if (!reply) return;
+  if (reply.setSummaryChannel) reply = setSummaryChannel(msg.channelId);
   try {
     if (typeof msg.channel.sendTyping === "function") msg.channel.sendTyping().catch(() => {});
     await msg.channel.send(reply);
@@ -848,6 +939,8 @@ const SLASH = [
     o.setName("board").setDescription("One board in full (leave empty for all)").setAutocomplete(true)
   ),
   slash("stats", "Grand totals across every account"),
+  slash("farm", "The duo farm watchdog: who's farming, who it's relaunching"),
+  slash("summary", "The daily summary").addStringOption((o) => o.setName("where").setDescription("here = post it in this channel every morning").addChoices({ name: "here", value: "here" })),
   slash("status", "Bot health"),
   slash("prune", "Drop stale accounts now"),
   slash("remove", "Forget one account (exact name)").addStringOption((o) => nameOpt(o)),
@@ -874,6 +967,7 @@ function slashToText(i) {
     : word === "search" ? o.getString("game")
     : word === "top" ? o.getString("by") || ""
     : word === "global" ? o.getString("board") || ""
+    : word === "summary" ? o.getString("where") || ""
     : ["account", "join", "remove"].includes(word) ? o.getString("name")
     : "";
   return { word, rest: String(rest || "").trim().toLowerCase() };
@@ -901,7 +995,8 @@ client.on(Events.InteractionCreate, async (i) => {
   const ephemeral = word === "join"; // the join script is for you, not the channel
   try {
     await i.deferReply({ ephemeral });
-    const reply = await handleCommand(word, rest);
+    let reply = await handleCommand(word, rest);
+    if (reply && reply.setSummaryChannel) reply = setSummaryChannel(i.channelId);
     await i.editReply(reply || "Unknown command.");
   } catch (e) {
     console.error("slash failed:", e.message);
@@ -934,6 +1029,21 @@ client.on(Events.InteractionCreate, async (i) => {
   }
 });
 
+// One copy only: a second one would answer every command twice.
+function takeLock(file) {
+  const old = Number((readJson(file) || {}).pid);
+  if (old && old !== process.pid) {
+    try {
+      process.kill(old, 0);
+      return false;
+    } catch (e) {
+      /* stale lock: that copy is gone */
+    }
+  }
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid }));
+  return true;
+}
+
 // Stay up overnight: log instead of dying on a stray network error.
 client.on("error", (e) => console.error("client error:", e && e.message));
 process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e && e.message ? e.message : e));
@@ -944,8 +1054,13 @@ if (TEST) {
     abbrev, dur, esc, samePeers, accountsEmbed, accountsEmbeds, accountEmbed, topEmbed, statsEmbed, gamesEmbed, joinEmbed,
     statusEmbed, isAdmin, interactionIsAdmin, handleCommand, brand, helpEmbed, findAccount, notFound, editDistance,
     compareEmbed, cardButtons, joinButtons, mergeAccounts, gameName, verdict, SLASH, suggest, slashToText, globalEmbed, shown,
+    farmEmbed, summaryEmbed, snapshotOf, takeLock,
   };
 } else {
+  if (!takeLock(path.join(__dirname, "bot.pid"))) {
+    console.error("Another copy of the bot is already running; exiting so commands aren't answered twice.");
+    process.exit(0);
+  }
   client.login(TOKEN).catch((e) => {
     console.error("Login failed. Check the token, and that Message Content Intent is on.", e.message);
     process.exit(1);

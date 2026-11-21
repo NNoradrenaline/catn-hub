@@ -4608,7 +4608,8 @@ local BASE = "https://raw.githubusercontent.com/NNoradrenaline/catn-hub/main/dis
 local LOADER = 'loadstring(game:HttpGet("' .. BASE .. 'catn_hub.lua"))()'
 local SOURCES = {}
 local function GET_SOURCE(key)
-    if not SOURCES[key] then SOURCES[key] = game:HttpGet(BASE .. "games/" .. key .. ".lua") end
+    -- the query string skips GitHub's and Roblox's caches, so a pushed fix reaches players right away
+    if not SOURCES[key] then SOURCES[key] = game:HttpGet(BASE .. "games/" .. key .. ".lua?t=" .. os.time()) end
     return SOURCES[key]
 end
 
@@ -4768,7 +4769,7 @@ return M
 end)()
 local ServerPick, Bus, Version = PART_serverpick, PART_bus, PART_version
 
-local HUB_VERSION = "1.17.5"
+local HUB_VERSION = "1.17.6"
 local INVITE_CODE = "TwqtNreVMr"
 local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
 
@@ -4816,7 +4817,7 @@ local GAMES = {
         Name = "Funky Friday",
         Key = "ff",
         Icon = "music",
-        Version = "1.8.7",
+        Version = "1.8.8",
         Detect = function() return game.GameId == 2404080894 or game.PlaceId == 6447798030 end,
     },
     {

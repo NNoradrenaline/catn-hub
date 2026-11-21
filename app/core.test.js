@@ -76,4 +76,12 @@ assert.deepStrictEqual(C.gained(H, "wins", 0, "b"), { series: [{ t: 0, v: 0 }, {
 // the app closed for an hour: the jump across the gap isn't counted
 assert.strictEqual(C.gained([smp(0, { a: ["wins", 5] }), smp(60, { a: ["wins", 50] }), smp(61, { a: ["wins", 51] })], "wins", 0).total, 1);
 
+// downtime: holes in an account's samples, and a missing tail up to now
+const DS = [smp(0, { a: ["wins", 1], b: ["wins", 1] }), smp(1, { a: ["wins", 1] }), smp(2, { a: ["wins", 1] }), smp(10, { a: ["wins", 2], b: ["wins", 2] }), smp(11, { a: ["wins", 3] })];
+assert.deepStrictEqual(C.downtime(DS, 0, 11 * M, "a"), [[2 * M, 10 * M]]);
+assert.deepStrictEqual(C.downtime(DS, 0, 11 * M, "b"), [[0, 10 * M], [10 * M, 11 * M]].filter(([x, y]) => y - x > 3 * M));
+assert.deepStrictEqual(C.downtime(DS, 0, 20 * M, "a"), [[2 * M, 10 * M], [11 * M, 20 * M]]);
+assert.deepStrictEqual(C.downtime(DS, 5 * M, 11 * M, "a"), [], "starts at the first sample in range");
+assert.deepStrictEqual(C.downtime([], 0, 20 * M, "a"), [], "no history, no downtime");
+
 console.log("core: all tests pass");
