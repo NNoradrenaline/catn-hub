@@ -94,7 +94,7 @@ function ps(cmd) {
   return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8", windowsHide: true, timeout: 30000 });
 }
 function robloxProcs() {
-  const out = ps("Get-Process RobloxPlayerBeta -ErrorAction SilentlyContinue | ForEach-Object { '{0}|{1}|{2}' -f $_.Id, [int64]$_.MainWindowHandle, [int]((Get-Date) - $_.StartTime).TotalSeconds }");
+  const out = ps("Get-Process RobloxPlayerBeta -ErrorAction SilentlyContinue | ForEach-Object { '{0}|{1}|{2}' -f $_.Id, [int64]$_.MainWindowHandle, [int]((Get-Date) - $_.StartTime).TotalSeconds }; exit 0"); // no Roblox open sets a failing exit code
   return out.split(/\r?\n/).filter(Boolean).map((l) => { const [pid, hwnd, age] = l.split("|").map(Number); return { pid, hasWindow: hwnd !== 0, age }; });
 }
 function kill(pid, why) { log("closing Roblox", pid, "-", why); try { process.kill(pid); } catch {} }
